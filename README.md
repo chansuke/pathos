@@ -40,3 +40,21 @@ ships only with Xcode. With Xcode installed, a plain `cargo run` outside
 
 Intel Macs are not covered by the flake: nixpkgs unstable dropped
 `x86_64-darwin`.
+
+### Windows
+
+Nix is not available, so use [rustup](https://rustup.rs) with the MSVC
+toolchain and install the Visual Studio Build Tools with the "Desktop
+development with C++" workload, which includes the Windows SDK.
+
+```powershell
+cargo run
+```
+
+Release builds compile HLSL shaders with `fxc.exe` from the Windows SDK. If the
+build cannot find it, point `GPUI_FXC_PATH` at it, for example:
+
+```powershell
+$env:GPUI_FXC_PATH = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\fxc.exe"
+cargo build --release
+```
