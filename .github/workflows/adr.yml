@@ -1,0 +1,17 @@
+name: ADR
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: cachix/install-nix-action@v31.11.3
+      - name: Check ADRs
+        run: nix shell --inputs-from . nixpkgs#adrs -c adrs doctor
+      - name: Check that the ADR index is up to date
+        run: nix shell --inputs-from . nixpkgs#adrs -c adrs generate toc | diff - docs/adr/README.md
