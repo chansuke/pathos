@@ -38,6 +38,10 @@ cargo run
 If a release build cannot find `fxc.exe`, set `GPUI_FXC_PATH` to its path in the
 Windows SDK.
 
+## Architecture decisions
+
+Design decisions are recorded in [docs/adr](docs/adr/README.md).
+
 ## Note
 
 `Cargo.lock` pins `libc` to 0.2.189 because gpui 0.2.2 depends on an `xattr`
