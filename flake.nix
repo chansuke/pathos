@@ -77,6 +77,7 @@
               packages =
                 with pkgs;
                 [
+                  adrs
                   clippy
                   rust-analyzer
                   rustfmt
