@@ -78,6 +78,7 @@
                 with pkgs;
                 [
                   adrs
+                  lean4
                   clippy
                   rust-analyzer
                   rustfmt
