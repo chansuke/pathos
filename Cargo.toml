@@ -1,10 +1,22 @@
 [package]
 name = "pathos"
-version = "0.1.0"
-edition = "2024"
+description = "A DAW (digital audio workstation) built with gpui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
 
 [dependencies]
 gpui = "0.2.2"
 
 [workspace]
 members = ["crates/pathos-core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+repository = "https://github.com/chansuke/pathos"
