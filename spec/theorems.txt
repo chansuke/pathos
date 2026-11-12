@@ -1,7 +1,7 @@
-Pathos.initial_wellFormed : Pathos.Project.initial.wellFormed = true
-Pathos.microsTimesPpq_monotone : ∀ (tempo : List Pathos.TempoChange) (a b : Pathos.Tick), a ≤ b → Pathos.microsTimesPpq tempo a ≤ Pathos.microsTimesPpq tempo b
-Pathos.redo_undo : ∀ (h h' : Pathos.History), h.edit Pathos.Edit.undo = Except.ok h' → h'.edit Pathos.Edit.redo = Except.ok h
-Pathos.step_preserves_wellFormed : ∀ (p q : Pathos.Project) (c : Pathos.Command), p.wellFormed = true → Pathos.step p c = Except.ok q → q.wellFormed = true
-Pathos.tickToMicros_monotone : ∀ (p : Pathos.Project) (a b : Pathos.Tick), a ≤ b → p.tickToMicros a ≤ p.tickToMicros b
-Pathos.undo_apply : ∀ (h h' : Pathos.History) (c : Pathos.Command), h.edit (Pathos.Edit.apply c) = Except.ok h' → ∃ h'', h'.edit Pathos.Edit.undo = Except.ok h'' ∧ h''.present = h.present ∧ h''.past = h.past
-Pathos.undo_redo : ∀ (h h' : Pathos.History), h.edit Pathos.Edit.redo = Except.ok h' → h'.edit Pathos.Edit.undo = Except.ok h
+Pathos.initial_wellFormed [proved] : Pathos.Project.initial.wellFormed = true
+Pathos.microsTimesPpq_monotone [proved] : ∀ (tempo : List Pathos.TempoChange) (a b : Pathos.Tick), a ≤ b → Pathos.microsTimesPpq tempo a ≤ Pathos.microsTimesPpq tempo b
+Pathos.redo_undo [proved] : ∀ (h h' : Pathos.History), h.edit Pathos.Edit.undo = Except.ok h' → h'.edit Pathos.Edit.redo = Except.ok h
+Pathos.step_preserves_wellFormed [unfinished] : ∀ (p q : Pathos.Project) (c : Pathos.Command), p.wellFormed = true → Pathos.step p c = Except.ok q → q.wellFormed = true
+Pathos.tickToMicros_monotone [proved] : ∀ (p : Pathos.Project) (a b : Pathos.Tick), a ≤ b → p.tickToMicros a ≤ p.tickToMicros b
+Pathos.undo_apply [proved] : ∀ (h h' : Pathos.History) (c : Pathos.Command), h.edit (Pathos.Edit.apply c) = Except.ok h' → ∃ h'', h'.edit Pathos.Edit.undo = Except.ok h'' ∧ h''.present = h.present ∧ h''.past = h.past
+Pathos.undo_redo [proved] : ∀ (h h' : Pathos.History), h.edit Pathos.Edit.redo = Except.ok h' → h'.edit Pathos.Edit.undo = Except.ok h
