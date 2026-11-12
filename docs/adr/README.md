@@ -5,3 +5,4 @@
 * [5. Let AI agents operate through the command API without built-in generative models](0005-let-ai-agents-operate-through-the-command-api-without-built-in-generative-models.md)
 * [6. Provide AI review as findings with applicable command proposals](0006-provide-ai-review-as-findings-with-applicable-command-proposals.md)
 * [7. Test end to end against REAPER renders and stored references from other DAWs](0007-test-end-to-end-against-reaper-renders-and-stored-references-from-other-daws.md)
+* [8. Scan CI workflows and dependencies for vulnerabilities](0008-scan-ci-workflows-and-dependencies-for-vulnerabilities.md)
