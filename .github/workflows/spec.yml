@@ -11,6 +11,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: cachix/install-nix-action@v31.11.3
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          # Run cargo and rustc from the dev shell, not the runner's rustup.
+          cmd-format: nix develop -c {0}
+          # Pull requests restore the cache that main saves.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build the Lean model
         run: nix develop -c lake -d spec build
       - name: Report unfinished proofs
