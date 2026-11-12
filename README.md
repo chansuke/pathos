@@ -38,7 +38,16 @@ cargo run
 If a release build cannot find `fxc.exe`, set `GPUI_FXC_PATH` to its path in the
 Windows SDK.
 
-## Architecture decisions
+## Specification
+
+The project core is specified by an executable Lean 4 model in `spec/`. The Rust
+core in `crates/pathos-core` is tested against it:
+
+```sh
+nix develop
+lake -d spec build
+cargo test -p pathos-core
+```
 
 Design decisions are recorded in [docs/adr](docs/adr/README.md).
 
