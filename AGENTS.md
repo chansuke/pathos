@@ -22,7 +22,7 @@ The project changes only by applying a `Command` (ADR 2).
   make a failure go away.
 - Proofs are not required to merge (ADR 4). State a property even if its proof
   is `sorry`, never delete a theorem because its proof is hard, and do not add
-  axioms.
+  axioms. Never replace a finished proof with `sorry` (ADR 9).
 - Keep a failing trace as a regression: commit
   `crates/pathos-core/tests/differential.proptest-regressions`, and add the
   trace to `core_agrees_with_model_on_boundaries` when it sits on a boundary of
@@ -35,8 +35,9 @@ Commands:
   model first. `PROPTEST_CASES` sets the number of generated traces.
 - `grep -rw sorry spec --include='*.lean' | wc -l`: count unfinished proofs.
 - `cd spec && lake env lean --run Audit.lean > theorems.txt`: regenerate the
-  list of theorems and check their axioms. Commit `spec/theorems.txt`; CI fails
-  when it is out of date or when a theorem is removed.
+  list of theorems, mark each proved or unfinished, and check their axioms.
+  Commit `spec/theorems.txt`; CI fails when it is out of date, when a theorem
+  is removed or when a proved theorem becomes unfinished.
 - `cargo test -p pathos-core --test differential generators_reach_every_rule -- --nocapture`:
   show how often the generators reach each rule. If a rule falls below the
   minimum, make the generators reach it more often; do not lower the minimum.

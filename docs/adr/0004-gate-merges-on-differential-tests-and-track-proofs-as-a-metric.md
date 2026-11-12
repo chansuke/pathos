@@ -3,6 +3,9 @@ number: 4
 title: Gate merges on differential tests and track proofs as a metric
 status: accepted
 date: 2026-11-12
+links:
+- target: 9
+  kind: amendedby
 ---
 
 # Gate merges on differential tests and track proofs as a metric
