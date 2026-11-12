@@ -5,3 +5,6 @@ edition = "2024"
 
 [dependencies]
 gpui = "0.2.2"
+
+[workspace]
+members = ["crates/pathos-core"]

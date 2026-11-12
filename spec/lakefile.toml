@@ -1,0 +1,9 @@
+name = "pathos"
+defaultTargets = ["Pathos", "pathos-model"]
+
+[[lean_lib]]
+name = "Pathos"
+
+[[lean_exe]]
+name = "pathos-model"
+root = "Main"

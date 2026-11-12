@@ -1,0 +1,23 @@
+name: Spec
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: cachix/install-nix-action@v31.11.3
+      - name: Build the Lean model
+        run: nix develop -c lake -d spec build
+      - name: Report unfinished proofs
+        run: |
+          count=$(grep -rw sorry spec --include='*.lean' | wc -l || true)
+          echo "Unfinished proofs (\`sorry\`): $count" >> "$GITHUB_STEP_SUMMARY"
+      - name: Check the Rust core against the model
+        run: nix develop -c cargo test -p pathos-core
+        env:
+          PROPTEST_CASES: 10000
