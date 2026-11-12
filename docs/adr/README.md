@@ -7,3 +7,4 @@
 * [7. Test end to end against REAPER renders and stored references from other DAWs](0007-test-end-to-end-against-reaper-renders-and-stored-references-from-other-daws.md)
 * [8. Scan CI workflows and dependencies for vulnerabilities](0008-scan-ci-workflows-and-dependencies-for-vulnerabilities.md)
 * [9. Keep a proved theorem proved](0009-keep-a-proved-theorem-proved.md)
+* [10. Never reuse a clip id, even after undo](0010-never-reuse-a-clip-id-even-after-undo.md)

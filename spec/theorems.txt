@@ -1,7 +1,11 @@
-Pathos.initial_wellFormed [proved] : Pathos.Project.initial.wellFormed = true
+Pathos.edit_nextClipId_le [proved] : ∀ (h h' : Pathos.History) (e : Pathos.Edit), h.edit e = Except.ok h' → h.nextClipId ≤ h'.nextClipId
+Pathos.initial_wellFormed [proved] : Pathos.Project.initial.wellFormed 0 = true
 Pathos.microsTimesPpq_monotone [proved] : ∀ (tempo : List Pathos.TempoChange) (a b : Pathos.Tick), a ≤ b → Pathos.microsTimesPpq tempo a ≤ Pathos.microsTimesPpq tempo b
 Pathos.redo_undo [proved] : ∀ (h h' : Pathos.History), h.edit Pathos.Edit.undo = Except.ok h' → h'.edit Pathos.Edit.redo = Except.ok h
-Pathos.step_preserves_wellFormed [unfinished] : ∀ (p q : Pathos.Project) (c : Pathos.Command), p.wellFormed = true → Pathos.step p c = Except.ok q → q.wellFormed = true
+Pathos.replaceClip_ids [proved] : ∀ (p : Pathos.Project) (c x : Pathos.Clip), x ∈ p.replaceClip c → x.id ∈ List.map (fun x => x.id) p.clips
+Pathos.step_new_clip_ids [proved] : ∀ (p q : Pathos.Project) (n n' : Nat) (c : Pathos.Command), Pathos.step p n c = Except.ok (q, n') → ∀ (clip : Pathos.Clip), clip ∈ q.clips → ¬clip.id ∈ List.map (fun x => x.id) p.clips → n ≤ clip.id ∧ clip.id < n'
+Pathos.step_nextClipId_le [proved] : ∀ (p q : Pathos.Project) (n n' : Nat) (c : Pathos.Command), Pathos.step p n c = Except.ok (q, n') → n ≤ n'
+Pathos.step_preserves_wellFormed [unfinished] : ∀ (p q : Pathos.Project) (n n' : Nat) (c : Pathos.Command), p.wellFormed n = true → Pathos.step p n c = Except.ok (q, n') → q.wellFormed n' = true
 Pathos.tickToMicros_monotone [proved] : ∀ (p : Pathos.Project) (a b : Pathos.Tick), a ≤ b → p.tickToMicros a ≤ p.tickToMicros b
 Pathos.undo_apply [proved] : ∀ (h h' : Pathos.History) (c : Pathos.Command), h.edit (Pathos.Edit.apply c) = Except.ok h' → ∃ h'', h'.edit Pathos.Edit.undo = Except.ok h'' ∧ h''.present = h.present ∧ h''.past = h.past
 Pathos.undo_redo [proved] : ∀ (h h' : Pathos.History), h.edit Pathos.Edit.redo = Except.ok h' → h'.edit Pathos.Edit.undo = Except.ok h

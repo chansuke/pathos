@@ -92,7 +92,7 @@ fn render(history: &History) -> String {
     format!(
         "tracks={} next={} tempo={} clips={} undo={} redo={}",
         project.track_count(),
-        project.next_clip_id(),
+        history.next_clip_id(),
         tempo.join(","),
         clips.join(","),
         history.undo_depth(),
@@ -334,6 +334,17 @@ fn core_agrees_with_model_on_boundaries() {
             Request::Edit(Edit::Redo),
             apply(AddTrack),
             Request::Edit(Edit::Redo),
+        ],
+        // Undo does not reissue an id (ADR 10).
+        vec![
+            apply(AddTrack),
+            add_clip(0, 240),
+            Request::Edit(Edit::Undo),
+            add_clip(480, 240),
+            split(1, 600),
+            Request::Edit(Edit::Undo),
+            Request::Edit(Edit::Redo),
+            split(1, 540),
         ],
         // Which error is reported when several apply.
         vec![

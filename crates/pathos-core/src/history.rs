@@ -15,6 +15,9 @@ pub struct History {
     present: Project,
     /// Undone projects, next to redo last.
     future: Vec<Project>,
+    /// The id the next created clip receives. Undo and redo keep it, so an id
+    /// is never given to two clips.
+    next_clip_id: u64,
 }
 
 impl History {
@@ -30,14 +33,20 @@ impl History {
         self.future.len()
     }
 
+    /// The id the next created clip receives.
+    pub fn next_clip_id(&self) -> u64 {
+        self.next_clip_id
+    }
+
     /// Apply an edit. A rejected edit changes nothing; an accepted command
     /// clears redo.
     pub fn edit(&mut self, edit: Edit) -> Result<(), EditError> {
         match edit {
             Edit::Apply(command) => {
-                let next = self.present.apply(command)?;
+                let (next, next_clip_id) = self.present.apply(self.next_clip_id, command)?;
                 self.past.push(std::mem::replace(&mut self.present, next));
                 self.future.clear();
+                self.next_clip_id = next_clip_id;
             }
             Edit::Undo => {
                 let previous = self.past.pop().ok_or(EditError::NothingToUndo)?;

@@ -49,7 +49,7 @@ def History.render (h : History) : String :=
   let p := h.present
   let tempo := p.tempo.map fun change => s!"{change.tick}:{change.usPerQuarter}"
   let clips := p.clips.map fun c => s!"{c.id}:{c.track}:{c.start}:{c.length}"
-  s!"tracks={p.trackCount} next={p.nextClipId} tempo={",".intercalate tempo} "
+  s!"tracks={p.trackCount} next={h.nextClipId} tempo={",".intercalate tempo} "
     ++ s!"clips={",".intercalate clips} undo={h.past.length} redo={h.future.length}"
 
 /-- Handle one request, returning the history to continue with and the reply.
@@ -60,7 +60,7 @@ def History.respond (h : History) : Request → History × String
     match h.edit edit with
     | .error e => (h, s!"err {e.name}")
     | .ok next =>
-      if next.present.wellFormed then (next, s!"ok {next.render}")
+      if next.present.wellFormed next.nextClipId then (next, s!"ok {next.render}")
       else (next, s!"invariant-violated {next.render}")
 
 end Pathos
