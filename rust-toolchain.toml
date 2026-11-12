@@ -1,0 +1,6 @@
+[toolchain]
+# Match the rustc that `nix develop` provides from nixpkgs, so builds through
+# rustup (e.g. on Windows) use the same compiler as CI.
+channel = "1.99.0"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

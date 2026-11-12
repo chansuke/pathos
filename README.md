@@ -56,3 +56,7 @@ Design decisions are recorded in [docs/adr](docs/adr/README.md).
 `Cargo.lock` pins `libc` to 0.2.189 because gpui 0.2.2 depends on an `xattr`
 release that does not build with newer `libc` on Linux. Avoid a bare
 `cargo update`.
+
+## License
+
+pathos is licensed under the [MIT License](LICENSE).

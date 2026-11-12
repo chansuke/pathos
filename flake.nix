@@ -78,6 +78,7 @@
                 with pkgs;
                 [
                   adrs
+                  cargo-deny
                   lean4
                   clippy
                   rust-analyzer

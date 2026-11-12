@@ -1,7 +1,12 @@
 [package]
 name = "pathos-core"
-version = "0.1.0"
-edition = "2024"
+description = "The project model of pathos, specified by the Lean model in spec/"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
 
 [dev-dependencies]
 proptest = "1"
