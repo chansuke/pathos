@@ -15,3 +15,5 @@ jobs:
         run: nix develop -c cargo fmt --all --check
       - name: Run clippy
         run: nix develop -c cargo clippy --workspace --all-targets -- -D warnings
+      - name: Check licenses, advisories and sources
+        run: nix develop -c cargo deny check
