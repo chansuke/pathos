@@ -176,7 +176,9 @@ fn us_per_quarter() -> impl Strategy<Value = u64> {
 
 fn command() -> impl Strategy<Value = Command> {
     let track = 0u64..3;
-    let id = 0u64..8;
+    // Few clips exist in a trace, so small ids mostly name one, and the rest
+    // are unknown.
+    let id = 0u64..4;
     prop_oneof![
         3 => Just(Command::AddTrack),
         6 => (track.clone(), tick(), length())
@@ -187,7 +189,7 @@ fn command() -> impl Strategy<Value = Command> {
         2 => id.prop_map(|id| Command::DeleteClip { id }),
         3 => (tick(), us_per_quarter())
             .prop_map(|(tick, us_per_quarter)| Command::SetTempo { tick, us_per_quarter }),
-        1 => tick().prop_map(|tick| Command::RemoveTempo { tick }),
+        3 => tick().prop_map(|tick| Command::RemoveTempo { tick }),
     ]
 }
 
