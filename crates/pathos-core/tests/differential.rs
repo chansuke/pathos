@@ -4,12 +4,15 @@
 //! executable. Every reply must be equal, including errors. Build the model
 //! first with `lake -d spec build`, or point `PATHOS_MODEL` at the executable.
 
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command as Process, Stdio};
 
 use pathos_core::{Command, Edit, EditError, History, MAX_TICK, MAX_US_PER_QUARTER};
 use proptest::prelude::*;
+use proptest::strategy::ValueTree;
+use proptest::test_runner::TestRunner;
 
 #[derive(Clone, Copy, Debug)]
 enum Request {
@@ -43,6 +46,20 @@ impl Request {
         }
     }
 }
+
+const ERRORS: [EditError; 11] = [
+    EditError::EmptyClip,
+    EditError::UnknownTrack,
+    EditError::UnknownClip,
+    EditError::OutOfRange,
+    EditError::Overlap,
+    EditError::SplitOutsideClip,
+    EditError::InvalidTempo,
+    EditError::InitialTempo,
+    EditError::NoTempoChange,
+    EditError::NothingToUndo,
+    EditError::NothingToRedo,
+];
 
 fn error_name(error: EditError) -> &'static str {
     match error {
@@ -211,11 +228,15 @@ fn cases() -> u32 {
         .unwrap_or(2000)
 }
 
+fn trace() -> impl Strategy<Value = Vec<Request>> {
+    prop::collection::vec(request(), 1..80)
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(cases()))]
 
     #[test]
-    fn core_agrees_with_model(trace in prop::collection::vec(request(), 1..80)) {
+    fn core_agrees_with_model(trace in trace()) {
         prop_assert_eq!(core_replies(&trace), model_replies(&trace));
     }
 }
@@ -334,4 +355,74 @@ fn core_agrees_with_model_on_boundaries() {
     for trace in traces {
         assert_eq!(core_replies(&trace), model_replies(&trace), "{trace:?}");
     }
+}
+
+/// The number of traces sampled to measure how often the generators reach each
+/// rule, fixed so that the measurement does not depend on `PROPTEST_CASES`.
+const COVERAGE_TRACES: u32 = 2000;
+
+/// Every error, and success for every kind of request, must appear at least
+/// this often in the sampled traces, or the differential tests barely check
+/// that rule.
+const MIN_HITS: u32 = 100;
+
+const REQUEST_KINDS: [&str; 10] = [
+    "add-track",
+    "add-clip",
+    "move-clip",
+    "split-clip",
+    "delete-clip",
+    "set-tempo",
+    "remove-tempo",
+    "undo",
+    "redo",
+    "micros",
+];
+
+/// How often the generated traces reach each rule. The traces come from a
+/// fixed seed, so the counts change only when the generators or the rules do.
+/// Run with `--nocapture` to print the counts as a Markdown table.
+#[test]
+fn generators_reach_every_rule() {
+    let mut runner = TestRunner::deterministic();
+    let mut hits: BTreeMap<(String, String), u32> = BTreeMap::new();
+    for _ in 0..COVERAGE_TRACES {
+        let trace = trace().new_tree(&mut runner).unwrap().current();
+        for (request, reply) in trace.iter().zip(core_replies(&trace)) {
+            let encoded = request.encode();
+            let kind = encoded.split(' ').next().unwrap();
+            let outcome = reply.strip_prefix("err ").unwrap_or("ok");
+            *hits.entry((kind.into(), outcome.into())).or_default() += 1;
+        }
+    }
+
+    println!("| request | outcome | hits |");
+    println!("| --- | --- | ---: |");
+    for ((kind, outcome), count) in &hits {
+        println!("| {kind} | {outcome} | {count} |");
+    }
+
+    let total = |matches: &dyn Fn(&str, &str) -> bool| -> u32 {
+        hits.iter()
+            .filter(|((kind, outcome), _)| matches(kind, outcome))
+            .map(|(_, count)| count)
+            .sum()
+    };
+    let errors = ERRORS.map(error_name).map(|name| {
+        let count = total(&|_, outcome| outcome == name);
+        (name.to_owned(), count)
+    });
+    let successes = REQUEST_KINDS.map(|kind| {
+        let count = total(&|k, outcome| k == kind && outcome == "ok");
+        (format!("{kind} ok"), count)
+    });
+    let rare: Vec<_> = errors
+        .into_iter()
+        .chain(successes)
+        .filter(|(_, count)| *count < MIN_HITS)
+        .collect();
+    assert!(
+        rare.is_empty(),
+        "rules reached fewer than {MIN_HITS} times in {COVERAGE_TRACES} traces: {rare:?}"
+    );
 }

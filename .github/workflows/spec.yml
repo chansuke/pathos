@@ -27,3 +27,8 @@ jobs:
         run: nix develop -c cargo test -p pathos-core
         env:
           PROPTEST_CASES: 10000
+      - name: Report how often the generators reach each rule
+        run: |
+          echo "### Generator coverage" >> "$GITHUB_STEP_SUMMARY"
+          nix develop -c cargo test -q -p pathos-core --test differential generators_reach_every_rule -- --nocapture \
+            | grep '^|' >> "$GITHUB_STEP_SUMMARY"
