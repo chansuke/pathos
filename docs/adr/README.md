@@ -1,1 +1,6 @@
 * [1. Record architecture decisions](0001-record-architecture-decisions.md)
+* [2. Share one command vocabulary across the model, core, UI and agents](0002-share-one-command-vocabulary-across-the-model-core-ui-and-agents.md)
+* [3. Use an executable Lean 4 model as the specification of the core](0003-use-an-executable-lean-4-model-as-the-specification-of-the-core.md)
+* [4. Gate merges on differential tests and track proofs as a metric](0004-gate-merges-on-differential-tests-and-track-proofs-as-a-metric.md)
+* [5. Let AI agents operate through the command API without built-in generative models](0005-let-ai-agents-operate-through-the-command-api-without-built-in-generative-models.md)
+* [6. Provide AI review as findings with applicable command proposals](0006-provide-ai-review-as-findings-with-applicable-command-proposals.md)
