@@ -14,6 +14,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo deny check
 lake -d spec build
+(cd spec && lake env lean --run Audit.lean > theorems.txt)
 cargo test -p pathos-core
 ```
 

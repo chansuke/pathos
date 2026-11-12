@@ -23,6 +23,32 @@ jobs:
         run: |
           count=$(grep -rw sorry spec --include='*.lean' | wc -l || true)
           echo "Unfinished proofs (\`sorry\`): $count" >> "$GITHUB_STEP_SUMMARY"
+      - name: Audit theorems and axioms
+        run: |
+          nix develop -c sh -c 'cd spec && lake env lean --run Audit.lean' \
+            > "$RUNNER_TEMP/theorems.txt" 2> "$RUNNER_TEMP/audit.txt" \
+            || { cat "$RUNNER_TEMP/audit.txt"; exit 1; }
+          grep -E '^[0-9]+ theorems' "$RUNNER_TEMP/audit.txt" >> "$GITHUB_STEP_SUMMARY"
+          if ! diff -u spec/theorems.txt "$RUNNER_TEMP/theorems.txt"; then
+            echo "::error file=spec/theorems.txt::Out of date. Regenerate it with: cd spec && lake env lean --run Audit.lean > theorems.txt"
+            exit 1
+          fi
+      - name: Check that no theorem is removed
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --quiet --depth=1 origin "$GITHUB_BASE_REF"
+          git show FETCH_HEAD:spec/theorems.txt > "$RUNNER_TEMP/base.txt" 2>/dev/null || exit 0
+          names() { cut -d' ' -f1 "$1" | sort; }
+          restated=$(comm -13 <(sort "$RUNNER_TEMP/base.txt") <(sort spec/theorems.txt) \
+            | cut -d' ' -f1 | sort | comm -12 - <(names "$RUNNER_TEMP/base.txt"))
+          for name in $restated; do
+            echo "::warning file=spec/theorems.txt::$name is restated; its new statement needs human review"
+          done
+          removed=$(comm -23 <(names "$RUNNER_TEMP/base.txt") <(names spec/theorems.txt))
+          for name in $removed; do
+            echo "::error file=spec/theorems.txt::$name is removed; keep it, with sorry if its proof is hard"
+          done
+          [ -z "$removed" ]
       - name: Check the Rust core against the model
         run: nix develop -c cargo test -p pathos-core
         env:

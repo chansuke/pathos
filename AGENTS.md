@@ -34,6 +34,9 @@ Commands:
 - `cargo test -p pathos-core`: check the Rust core against the model. Build the
   model first. `PROPTEST_CASES` sets the number of generated traces.
 - `grep -rw sorry spec --include='*.lean' | wc -l`: count unfinished proofs.
+- `cd spec && lake env lean --run Audit.lean > theorems.txt`: regenerate the
+  list of theorems and check their axioms. Commit `spec/theorems.txt`; CI fails
+  when it is out of date or when a theorem is removed.
 - `cargo test -p pathos-core --test differential generators_reach_every_rule -- --nocapture`:
   show how often the generators reach each rule. If a rule falls below the
   minimum, make the generators reach it more often; do not lower the minimum.
