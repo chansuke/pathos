@@ -1,0 +1,8 @@
+version: 2
+updates:
+  # Cargo is left out: Cargo.lock pins libc for gpui (see README.md), and
+  # cargo-deny reports advisories.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
