@@ -1,0 +1,37 @@
+name: zizmor
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions: {}
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
+      # SARIF output always exits 0, so a separate step fails on findings.
+      - name: Collect findings for code scanning
+        run: |
+          nix shell --inputs-from . nixpkgs#zizmor -c zizmor --format=sarif . \
+            > "$RUNNER_TEMP/zizmor.sarif"
+        env:
+          # Online audits look up action tags and known vulnerable actions.
+          GH_TOKEN: ${{ github.token }}
+      - name: Upload findings to code scanning
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: ${{ runner.temp }}/zizmor.sarif
+          category: zizmor
+      - name: Audit workflows and Dependabot configuration
+        run: nix shell --inputs-from . nixpkgs#zizmor -c zizmor --format=github .
+        env:
+          GH_TOKEN: ${{ github.token }}
