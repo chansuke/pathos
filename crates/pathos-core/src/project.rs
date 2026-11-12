@@ -106,10 +106,12 @@ impl fmt::Display for EditError {
 impl std::error::Error for EditError {}
 
 /// A project. The only way to obtain a different one is [`Project::apply`].
+///
+/// The id the next created clip receives is not part of the project but of the
+/// [`History`](crate::History), so that undo does not reissue ids.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Project {
     track_count: u64,
-    next_clip_id: u64,
     /// Ordered by tick, starting at tick 0.
     tempo: Vec<TempoChange>,
     /// Ordered by id.
@@ -121,7 +123,6 @@ impl Default for Project {
     fn default() -> Self {
         Project {
             track_count: 0,
-            next_clip_id: 0,
             tempo: vec![TempoChange {
                 tick: 0,
                 us_per_quarter: 500_000,
@@ -139,11 +140,6 @@ fn exceeds_max_tick(start: Tick, length: u64) -> bool {
 impl Project {
     pub fn track_count(&self) -> u64 {
         self.track_count
-    }
-
-    /// The id the next created clip receives. Ids are never reused.
-    pub fn next_clip_id(&self) -> u64 {
-        self.next_clip_id
     }
 
     pub fn tempo(&self) -> &[TempoChange] {
@@ -165,10 +161,15 @@ impl Project {
             .any(|other| other.id != clip.id && clip.overlaps(other))
     }
 
-    /// Apply a command, returning the resulting project. Checks run in the
-    /// order the model lists them, which fixes the error reported when several
-    /// apply.
-    pub fn apply(&self, command: Command) -> Result<Project, EditError> {
+    /// Apply a command, where `next_clip_id` is the id the next created clip
+    /// receives. Returns the resulting project and the id after the command.
+    /// Checks run in the order the model lists them, which fixes the error
+    /// reported when several apply.
+    pub fn apply(
+        &self,
+        mut next_clip_id: u64,
+        command: Command,
+    ) -> Result<(Project, u64), EditError> {
         let mut next = self.clone();
         match command {
             Command::AddTrack => next.track_count += 1,
@@ -187,7 +188,7 @@ impl Project {
                     return Err(EditError::OutOfRange);
                 }
                 let clip = Clip {
-                    id: self.next_clip_id,
+                    id: next_clip_id,
                     track,
                     start,
                     length,
@@ -196,7 +197,7 @@ impl Project {
                     return Err(EditError::Overlap);
                 }
                 next.clips.push(clip);
-                next.next_clip_id += 1;
+                next_clip_id += 1;
             }
             Command::MoveClip { id, track, start } => {
                 let index = self.clip_index(id).ok_or(EditError::UnknownClip)?;
@@ -225,12 +226,12 @@ impl Project {
                 }
                 next.clips[index].length = tick - clip.start;
                 next.clips.push(Clip {
-                    id: self.next_clip_id,
+                    id: next_clip_id,
                     track: clip.track,
                     start: tick,
                     length: clip.stop() - tick,
                 });
-                next.next_clip_id += 1;
+                next_clip_id += 1;
             }
             Command::DeleteClip { id } => {
                 let index = self.clip_index(id).ok_or(EditError::UnknownClip)?;
@@ -266,7 +267,7 @@ impl Project {
                 next.tempo.remove(index);
             }
         }
-        Ok(next)
+        Ok((next, next_clip_id))
     }
 
     /// The time of `tick` in microseconds from the start, rounded down.
