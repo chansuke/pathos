@@ -38,13 +38,18 @@ jobs:
             echo "::error file=spec/theorems.txt::Out of date. Regenerate it with: cd spec && lake env lean --run Audit.lean > theorems.txt"
             exit 1
           fi
-      - name: Check that no theorem is removed
+      - name: Check that no theorem is removed or loses its proof
         if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          git fetch --quiet --depth=1 origin "$GITHUB_BASE_REF"
-          git show FETCH_HEAD:spec/theorems.txt > "$RUNNER_TEMP/base.txt" 2>/dev/null || exit 0
+          git fetch --quiet --depth=1 origin "$BASE_SHA"
+          git show "$BASE_SHA:spec/theorems.txt" > "$RUNNER_TEMP/base.txt"
           names() { cut -d' ' -f1 "$1" | sort; }
-          restated=$(comm -13 <(sort "$RUNNER_TEMP/base.txt") <(sort spec/theorems.txt) \
+          # Each line is `name [status] : statement`.
+          statements() { sed -E 's/^([^ ]+) \[[a-z]+\] :/\1 :/' "$1" | sort; }
+          with_status() { awk -v status="[$2]" '$2 == status { print $1 }' "$1" | sort; }
+          restated=$(comm -13 <(statements "$RUNNER_TEMP/base.txt") <(statements spec/theorems.txt) \
             | cut -d' ' -f1 | sort | comm -12 - <(names "$RUNNER_TEMP/base.txt"))
           for name in $restated; do
             echo "::warning file=spec/theorems.txt::$name is restated; its new statement needs human review"
@@ -53,7 +58,12 @@ jobs:
           for name in $removed; do
             echo "::error file=spec/theorems.txt::$name is removed; keep it, with sorry if its proof is hard"
           done
-          [ -z "$removed" ]
+          unproved=$(comm -12 <(with_status "$RUNNER_TEMP/base.txt" proved) \
+            <(with_status spec/theorems.txt unfinished))
+          for name in $unproved; do
+            echo "::error file=spec/theorems.txt::$name was proved and is now unfinished; restore its proof"
+          done
+          [ -z "$removed" ] && [ -z "$unproved" ]
       - name: Check the Rust core against the model
         run: nix develop -c cargo test -p pathos-core
         env:

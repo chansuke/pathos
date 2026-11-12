@@ -8,9 +8,12 @@ axioms each one depends on. Run it with `lake -d spec env lean --run Audit.lean`
 after `lake -d spec build`.
 
 The list is committed as `theorems.txt`, so that a pull request shows every
-theorem it adds, removes or restates. The audit fails when a theorem depends on
-an axiom other than the standard ones, or when the library declares an axiom.
-`sorryAx` is allowed, since proofs are not required to merge (ADR 4).
+theorem it adds, removes or restates, and every proof it finishes or undoes.
+Each line marks the theorem `[proved]` or `[unfinished]`: unfinished when it
+depends on `sorryAx`. The audit fails when a theorem depends on an axiom other
+than the standard ones, or when the library declares an axiom. `sorryAx` is
+allowed, since proofs are not required to merge (ADR 4), but CI rejects a
+theorem that was proved and is now unfinished (ADR 9).
 -/
 
 open Lean Meta
@@ -43,7 +46,6 @@ def audit : MetaM UInt32 := do
   let theorems := theorems.toArray.qsort (fun a b => a.1.toString < b.1.toString)
   let mut unfinished := #[]
   for (name, type) in theorems do
-    IO.println s!"{name} : {← statement type}"
     let axioms ← collectAxioms name
     for ax in axioms do
       if ax == ``sorryAx then
@@ -51,6 +53,8 @@ def audit : MetaM UInt32 := do
       else if !standardAxioms.contains ax then
         IO.eprintln s!"{name} depends on the axiom {ax}"
         failed := true
+    let status := if axioms.contains ``sorryAx then "unfinished" else "proved"
+    IO.println s!"{name} [{status}] : {← statement type}"
   IO.eprintln s!"{theorems.size} theorems, {unfinished.size} unfinished: {unfinished.toList}"
   return if failed then 1 else 0
 
