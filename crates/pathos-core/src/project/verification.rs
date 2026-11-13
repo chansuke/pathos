@@ -59,7 +59,11 @@ fn check_apply<const TEMPO: usize, const CLIPS: usize>(command: Command) {
     // Each increment of a counter takes one accepted edit, so a history cannot
     // reach `u64::MAX` of either.
     kani::assume(project.track_count < u64::MAX && next_clip_id < u64::MAX);
-    if let Ok((next, next_clip_id_after)) = project.apply(next_clip_id, command) {
+    let result = project.apply(next_clip_id, command);
+    // The assertions below prove nothing unless some input gets here and is
+    // accepted. CI fails a harness whose cover is not satisfied.
+    kani::cover!(result.is_ok(), "the command is accepted");
+    if let Ok((next, next_clip_id_after)) = result {
         assert!(next_clip_id <= next_clip_id_after);
         assert!(well_formed(&next, next_clip_id_after));
     }
@@ -183,12 +187,8 @@ apply_harness!(
     }
 );
 
-apply_harness!(
-    remove_tempo_with_1,
-    tempo = 1,
-    clips = 0,
-    Command::RemoveTempo { tick: kani::any() }
-);
+// With one tempo change, at tick 0, removing a tempo change always fails, and
+// two changes reach both of its errors as well as success.
 apply_harness!(
     remove_tempo_with_2,
     tempo = 2,
@@ -209,5 +209,10 @@ fn tick_to_micros_does_not_overflow() {
         clips: Vec::new(),
     };
     kani::assume(well_formed(&project, 0));
-    project.tick_to_micros(kani::any());
+    let tick: Tick = kani::any();
+    kani::cover!(
+        tick > project.tempo[1].tick,
+        "the tick lies past the second tempo change"
+    );
+    project.tick_to_micros(tick);
 }

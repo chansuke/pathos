@@ -45,6 +45,11 @@ result is well-formed and the next clip id has not decreased. Kani also fails
 the harness on any overflow or panic. Another harness checks that
 `tick_to_micros` does not overflow for any tick.
 
+A harness whose assumptions no input satisfies passes without checking
+anything. Each harness therefore has a cover property, for example that some
+input reaches an accepted command. Kani does not fail a harness whose cover is
+unsatisfiable or unreachable, so CI does.
+
 The harnesses assume that the track count and the next clip id are below
 `u64::MAX`, since each increment takes one accepted edit. What happens when
 they are reached is not specified by the model yet.
@@ -66,13 +71,14 @@ workflow pins the Kani version; Dependabot does not update it.
   harnesses used 55 GB and the desktop session was killed for memory
   pressure. Harnesses must stay small, and CI runs them one at a time.
 * Bad, because comparing two products, as monotonicity of `tick_to_micros`
-  needs, is beyond the solver at this size. That property is left to the
-  model's `tickToMicros_monotone`.
+  needs, is hard for the solver: a harness for it did not finish in five
+  minutes. That property is left to the model's `tickToMicros_monotone`.
 
 ### Confirmation
 
-The Kani workflow runs every harness on each pull request and on `main`, and
-writes the verdict of each harness to the job summary.
+The Kani workflow runs every harness on each pull request and on `main`, writes
+the verdict of each harness to the job summary, and fails when a harness fails
+or does not satisfy all of its cover properties.
 
 ## Pros and Cons of the Options
 

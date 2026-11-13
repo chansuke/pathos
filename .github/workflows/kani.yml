@@ -37,6 +37,28 @@ jobs:
           {
             echo "### Kani"
             echo '```'
-            grep -E 'Checking harness|VERIFICATION|Verification Time|Complete|Failed' "$RUNNER_TEMP/kani.log" || true
+            grep -E 'Checking harness|VERIFICATION|cover properties|Verification Time|Complete|Failed' "$RUNNER_TEMP/kani.log" || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+      # Kani passes a harness whose cover properties are unsatisfiable or
+      # unreachable. Such a harness checks nothing, so fail it here.
+      - name: Check that every harness satisfies its cover properties
+        if: ${{ !cancelled() }}
+        run: |
+          awk '
+            /^Checking harness / { harness = $3; sub(/\.\.\.$/, "", harness); covered[harness] = 0 }
+            /\*\* [0-9]+ of [0-9]+ cover properties satisfied/ {
+              for (i = 1; i <= NF; i++) if ($i == "of") { satisfied = $(i - 1); total = $(i + 1) }
+              covered[harness] = 1
+              if (satisfied != total) {
+                printf "::error::%s: %d of %d cover properties satisfied\n", harness, satisfied, total
+                failed = 1
+              }
+            }
+            END {
+              for (harness in covered) if (!covered[harness]) {
+                printf "::error::%s has no cover property\n", harness
+                failed = 1
+              }
+              exit failed
+            }' "$RUNNER_TEMP/kani.log"
