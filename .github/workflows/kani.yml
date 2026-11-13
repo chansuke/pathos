@@ -1,0 +1,42 @@
+name: Kani
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  KANI_VERSION: 0.68.0
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Kani is not in nixpkgs, and `cargo kani setup` installs the nightly it
+      # needs with rustup, so this job uses the runner's rustup instead of the
+      # Nix dev shell (ADR 11).
+      - name: Install Kani
+        run: |
+          cargo install --locked kani-verifier --version "$KANI_VERSION"
+          cargo kani setup
+      # Kani checks the harnesses one at a time, so the solver of one harness
+      # has the runner's memory to itself.
+      - name: Check the proof harnesses
+        working-directory: crates/pathos-core
+        run: cargo kani --output-format terse 2>&1 | tee "$RUNNER_TEMP/kani.log"
+      - name: Report each harness
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "### Kani"
+            echo '```'
+            grep -E 'Checking harness|VERIFICATION|Verification Time|Complete|Failed' "$RUNNER_TEMP/kani.log" || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
