@@ -1,7 +1,7 @@
 ---
 number: 11
 title: Check the Rust core with Kani for bounded inputs
-status: proposed
+status: accepted
 date: 2026-11-13
 ---
 
