@@ -1,5 +1,8 @@
 use std::fmt;
 
+#[cfg(kani)]
+mod verification;
+
 /// Musical time in ticks.
 pub type Tick = u64;
 
@@ -14,12 +17,14 @@ pub const MAX_US_PER_QUARTER: u64 = 60_000_000;
 
 /// From `tick` onwards a quarter note lasts `us_per_quarter` microseconds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(kani, derive(kani::Arbitrary))]
 pub struct TempoChange {
     pub tick: Tick,
     pub us_per_quarter: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(kani, derive(kani::Arbitrary))]
 pub struct Clip {
     pub id: u64,
     pub track: u64,
