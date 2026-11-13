@@ -6,6 +6,10 @@
 //! problem small enough for the solver. Clip commands leave the tempo alone and
 //! tempo commands leave the clips alone, so each harness varies only the list
 //! its command reads.
+//!
+//! The harnesses use MiniSat. On `split_clip_of_1` in CI, CaDiCaL (Kani's
+//! default) took 877 s and 16 GB, the whole memory of the runner; Kissat took
+//! 194 s and 2.9 GB; MiniSat took 26 s and 2.3 GB.
 
 use super::*;
 
@@ -76,6 +80,7 @@ macro_rules! apply_harness {
     ($name:ident, tempo = $tempo:literal, clips = $clips:literal, $command:expr) => {
         #[kani::proof]
         #[kani::unwind(4)]
+        #[kani::solver(minisat)]
         fn $name() {
             check_apply::<$tempo, $clips>($command);
         }
@@ -201,6 +206,7 @@ apply_harness!(
 /// products is too hard for the solver.
 #[kani::proof]
 #[kani::unwind(4)]
+#[kani::solver(minisat)]
 fn tick_to_micros_does_not_overflow() {
     let tempo: [TempoChange; 2] = kani::any();
     let project = Project {

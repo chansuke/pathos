@@ -27,10 +27,14 @@ jobs:
           cargo install --locked kani-verifier --version "$KANI_VERSION"
           cargo kani setup
       # Kani checks the harnesses one at a time, so the solver of one harness
-      # has the runner's memory to itself.
+      # has the runner's memory to itself. A harness that runs past the timeout
+      # fails on its own instead of exhausting the runner.
       - name: Check the proof harnesses
         working-directory: crates/pathos-core
-        run: cargo kani --output-format terse 2>&1 | tee "$RUNNER_TEMP/kani.log"
+        run: |
+          while true; do free -m | awk 'NR == 2 { print $3 }' >> "$RUNNER_TEMP/memory.txt"; sleep 10; done &
+          cargo kani --output-format terse -Z unstable-options --harness-timeout 10m 2>&1 \
+            | tee "$RUNNER_TEMP/kani.log"
       - name: Report each harness
         if: ${{ !cancelled() }}
         run: |
@@ -39,6 +43,7 @@ jobs:
             echo '```'
             grep -E 'Checking harness|VERIFICATION|cover properties|Verification Time|Complete|Failed' "$RUNNER_TEMP/kani.log" || true
             echo '```'
+            echo "Peak memory in use: $(sort -n "$RUNNER_TEMP/memory.txt" | tail -1) MiB"
           } >> "$GITHUB_STEP_SUMMARY"
       # Kani passes a harness whose cover properties are unsatisfiable or
       # unreachable. Such a harness checks nothing, so fail it here.

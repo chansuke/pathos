@@ -56,7 +56,14 @@ they are reached is not specified by the model yet.
 
 Kani runs in its own CI workflow, outside the Nix dev shell: it is not in
 nixpkgs, and `cargo kani setup` installs the nightly it needs with rustup. The
-workflow pins the Kani version; Dependabot does not update it.
+workflow pins the Kani version; Dependabot does not update it. It checks the
+harnesses one at a time, stops any harness after ten minutes with the unstable
+`--harness-timeout`, and reports the peak memory in use.
+
+The harnesses use MiniSat, chosen by measurement. On `split_clip_of_1` in CI,
+CaDiCaL, Kani's default, took 877 s and 16 GB, all the memory of the runner,
+and was killed in an earlier run; Kissat took 194 s and 2.9 GB; MiniSat took
+26 s and 2.3 GB. Z3 failed to run the harness.
 
 ### Consequences
 
@@ -70,6 +77,9 @@ workflow pins the Kani version; Dependabot does not update it.
   harness. Run locally, one solver per harness in parallel, an earlier set of
   harnesses used 55 GB and the desktop session was killed for memory
   pressure. Harnesses must stay small, and CI runs them one at a time.
+* Bad, because the cost depends on the solver as much as on the harness, and
+  a change to a harness can make another solver the better one. The choice
+  must be measured again when the harnesses change much.
 * Bad, because comparing two products, as monotonicity of `tick_to_micros`
   needs, is hard for the solver: a harness for it did not finish in five
   minutes. That property is left to the model's `tickToMicros_monotone`.
