@@ -1,0 +1,58 @@
+name: Mutants
+
+on:
+  pull_request:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mutants:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Run cargo and rustc from the dev shell, not the runner's rustup.
+          cmd-format: nix develop -c {0}
+          save-if: false
+      - name: Build the Lean model
+        run: nix develop -c lake -d spec build
+      # A pull request mutates only the lines it changes; the schedule mutates
+      # the whole core (ADR 13).
+      - name: Select the mutants
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git diff "$BASE_SHA" -- crates/pathos-core > "$RUNNER_TEMP/changes.diff"
+          echo "MUTANTS_ARGS=--in-diff $RUNNER_TEMP/changes.diff" >> "$GITHUB_ENV"
+      - name: Check that the tests catch each mutant
+        run: |
+          # shellcheck disable=SC2086 # MUTANTS_ARGS holds several arguments.
+          nix develop -c cargo mutants -p pathos-core --test-package pathos-core \
+            -o "$RUNNER_TEMP" $MUTANTS_ARGS
+        env:
+          PATHOS_MODEL: ${{ github.workspace }}/spec/.lake/build/bin/pathos-model
+      - name: Report the mutants the tests missed
+        if: ${{ !cancelled() }}
+        run: |
+          out="$RUNNER_TEMP/mutants.out"
+          [ -d "$out" ] || exit 0
+          {
+            echo "### Mutants"
+            echo "Caught $(wc -l < "$out/caught.txt"), missed $(wc -l < "$out/missed.txt"), timed out $(wc -l < "$out/timeout.txt"), unviable $(wc -l < "$out/unviable.txt")."
+            if [ -s "$out/missed.txt" ]; then
+              echo '```'
+              cat "$out/missed.txt"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -47,34 +47,73 @@ impl Request {
     }
 }
 
-const ERRORS: [EditError; 11] = [
-    EditError::EmptyClip,
-    EditError::UnknownTrack,
-    EditError::UnknownClip,
-    EditError::OutOfRange,
-    EditError::Overlap,
-    EditError::SplitOutsideClip,
-    EditError::InvalidTempo,
-    EditError::InitialTempo,
-    EditError::NoTempoChange,
-    EditError::NothingToUndo,
-    EditError::NothingToRedo,
-];
+/// Declares `ERRORS` and `error_name` from one list, so that the exhaustive
+/// match in `error_name` also keeps `ERRORS` complete.
+macro_rules! errors {
+    ($($variant:ident => $name:literal,)*) => {
+        /// Every error, so that the generators are required to reach each one.
+        const ERRORS: &[EditError] = &[$(EditError::$variant),*];
 
-fn error_name(error: EditError) -> &'static str {
-    match error {
-        EditError::EmptyClip => "empty-clip",
-        EditError::UnknownTrack => "unknown-track",
-        EditError::UnknownClip => "unknown-clip",
-        EditError::OutOfRange => "out-of-range",
-        EditError::Overlap => "overlap",
-        EditError::SplitOutsideClip => "split-outside-clip",
-        EditError::InvalidTempo => "invalid-tempo",
-        EditError::InitialTempo => "initial-tempo",
-        EditError::NoTempoChange => "no-tempo-change",
-        EditError::NothingToUndo => "nothing-to-undo",
-        EditError::NothingToRedo => "nothing-to-redo",
+        fn error_name(error: EditError) -> &'static str {
+            match error {
+                $(EditError::$variant => $name,)*
+            }
+        }
+    };
+}
+
+errors! {
+    EmptyClip => "empty-clip",
+    UnknownTrack => "unknown-track",
+    UnknownClip => "unknown-clip",
+    OutOfRange => "out-of-range",
+    Overlap => "overlap",
+    SplitOutsideClip => "split-outside-clip",
+    InvalidTempo => "invalid-tempo",
+    InitialTempo => "initial-tempo",
+    NoTempoChange => "no-tempo-change",
+    NothingToUndo => "nothing-to-undo",
+    NothingToRedo => "nothing-to-redo",
+}
+
+/// Each error explains itself to the user, which the model does not specify.
+#[test]
+fn every_error_has_a_message() {
+    for &error in ERRORS {
+        assert!(!error.to_string().is_empty(), "{error:?}");
     }
+}
+
+/// Declares `REQUEST_KINDS` and `Request::kind` from one list, so that the
+/// exhaustive match in `Request::kind` also keeps `REQUEST_KINDS` complete.
+macro_rules! request_kinds {
+    ($($pattern:pat => $kind:literal,)*) => {
+        /// Every kind of request, so that the generators are required to
+        /// reach each one.
+        const REQUEST_KINDS: &[&str] = &[$($kind),*];
+
+        impl Request {
+            /// The first word of the request in the model's trace format.
+            fn kind(&self) -> &'static str {
+                match self {
+                    $($pattern => $kind,)*
+                }
+            }
+        }
+    };
+}
+
+request_kinds! {
+    Request::Edit(Edit::Apply(Command::AddTrack)) => "add-track",
+    Request::Edit(Edit::Apply(Command::AddClip { .. })) => "add-clip",
+    Request::Edit(Edit::Apply(Command::MoveClip { .. })) => "move-clip",
+    Request::Edit(Edit::Apply(Command::SplitClip { .. })) => "split-clip",
+    Request::Edit(Edit::Apply(Command::DeleteClip { .. })) => "delete-clip",
+    Request::Edit(Edit::Apply(Command::SetTempo { .. })) => "set-tempo",
+    Request::Edit(Edit::Apply(Command::RemoveTempo { .. })) => "remove-tempo",
+    Request::Edit(Edit::Undo) => "undo",
+    Request::Edit(Edit::Redo) => "redo",
+    Request::Micros(_) => "micros",
 }
 
 fn render(history: &History) -> String {
@@ -377,19 +416,6 @@ const COVERAGE_TRACES: u32 = 2000;
 /// that rule.
 const MIN_HITS: u32 = 100;
 
-const REQUEST_KINDS: [&str; 10] = [
-    "add-track",
-    "add-clip",
-    "move-clip",
-    "split-clip",
-    "delete-clip",
-    "set-tempo",
-    "remove-tempo",
-    "undo",
-    "redo",
-    "micros",
-];
-
 /// How often the generated traces reach each rule. The traces come from a
 /// fixed seed, so the counts change only when the generators or the rules do.
 /// Run with `--nocapture` to print the counts as a Markdown table.
@@ -400,10 +426,10 @@ fn generators_reach_every_rule() {
     for _ in 0..COVERAGE_TRACES {
         let trace = trace().new_tree(&mut runner).unwrap().current();
         for (request, reply) in trace.iter().zip(core_replies(&trace)) {
-            let encoded = request.encode();
-            let kind = encoded.split(' ').next().unwrap();
             let outcome = reply.strip_prefix("err ").unwrap_or("ok");
-            *hits.entry((kind.into(), outcome.into())).or_default() += 1;
+            *hits
+                .entry((request.kind().into(), outcome.into()))
+                .or_default() += 1;
         }
     }
 
@@ -419,16 +445,16 @@ fn generators_reach_every_rule() {
             .map(|(_, count)| count)
             .sum()
     };
-    let errors = ERRORS.map(error_name).map(|name| {
+    let errors = ERRORS.iter().map(|&error| {
+        let name = error_name(error);
         let count = total(&|_, outcome| outcome == name);
         (name.to_owned(), count)
     });
-    let successes = REQUEST_KINDS.map(|kind| {
+    let successes = REQUEST_KINDS.iter().map(|&kind| {
         let count = total(&|k, outcome| k == kind && outcome == "ok");
         (format!("{kind} ok"), count)
     });
     let rare: Vec<_> = errors
-        .into_iter()
         .chain(successes)
         .filter(|(_, count)| *count < MIN_HITS)
         .collect();
