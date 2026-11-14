@@ -1,7 +1,7 @@
 ---
 number: 13
 title: Measure the tests by mutating the Rust core
-status: proposed
+status: accepted
 date: 2026-11-14
 ---
 
