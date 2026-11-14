@@ -1,0 +1,13 @@
+# cargo-mutants (ADR 13).
+
+exclude_globs = [
+    # Kani harnesses build only under `cfg(kani)`, so no test can catch a
+    # mutant of them; the Kani workflow checks them instead.
+    "crates/pathos-core/src/project/verification.rs",
+]
+
+exclude_re = [
+    # When `tick` equals the next change's tick, both branches stop at `tick`,
+    # so `>=` computes the same time as `>`.
+    "replace > with >= in Project::tick_to_micros",
+]

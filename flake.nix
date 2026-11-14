@@ -79,6 +79,7 @@
                 [
                   adrs
                   cargo-deny
+                  cargo-mutants
                   lean4
                   clippy
                   rust-analyzer

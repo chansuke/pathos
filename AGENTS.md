@@ -43,3 +43,8 @@ Commands:
 - `cargo test -p pathos-core --test differential generators_reach_every_rule -- --nocapture`:
   show how often the generators reach each rule. If a rule falls below the
   minimum, make the generators reach it more often; do not lower the minimum.
+- `PATHOS_MODEL=$PWD/spec/.lake/build/bin/pathos-model cargo mutants -p pathos-core --test-package pathos-core`:
+  check that the tests catch each mutant of the Rust core (ADR 13); add
+  `--in-diff <file>` to mutate only the lines of a diff. Close a missed mutant
+  with a test or a better generator. Exclude it in `.cargo/mutants.toml`, with
+  the reason, only when no test can catch it.

@@ -76,6 +76,14 @@ errors! {
     NothingToRedo => "nothing-to-redo",
 }
 
+/// Each error explains itself to the user, which the model does not specify.
+#[test]
+fn every_error_has_a_message() {
+    for &error in ERRORS {
+        assert!(!error.to_string().is_empty(), "{error:?}");
+    }
+}
+
 /// Declares `REQUEST_KINDS` and `Request::kind` from one list, so that the
 /// exhaustive match in `Request::kind` also keeps `REQUEST_KINDS` complete.
 macro_rules! request_kinds {
