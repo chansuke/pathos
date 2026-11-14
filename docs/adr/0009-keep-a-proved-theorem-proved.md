@@ -6,6 +6,8 @@ date: 2026-11-12
 links:
 - target: 4
   kind: amends
+- target: 12
+  kind: amendedby
 ---
 
 # Keep a proved theorem proved
