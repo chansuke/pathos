@@ -201,6 +201,21 @@ apply_harness!(
     Command::RemoveTempo { tick: kani::any() }
 );
 
+/// The harnesses of each command. A new command does not compile until it is
+/// given one here.
+#[allow(dead_code)]
+fn harnesses(command: Command) -> &'static [fn()] {
+    match command {
+        Command::AddTrack => &[add_track],
+        Command::AddClip { .. } => &[add_clip_to_0_clips, add_clip_to_1_clip, add_clip_to_2_clips],
+        Command::MoveClip { .. } => &[move_clip_of_1, move_clip_of_2],
+        Command::SplitClip { .. } => &[split_clip_of_1, split_clip_of_2],
+        Command::DeleteClip { .. } => &[delete_clip_of_1, delete_clip_of_2],
+        Command::SetTempo { .. } => &[set_tempo_with_1, set_tempo_with_2],
+        Command::RemoveTempo { .. } => &[remove_tempo_with_2],
+    }
+}
+
 /// `tick_to_micros` neither overflows nor panics for any tick. Whether it is
 /// monotone is proved on the model (`tickToMicros_monotone`); comparing two
 /// products is too hard for the solver.
