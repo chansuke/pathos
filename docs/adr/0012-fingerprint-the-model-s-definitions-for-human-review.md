@@ -1,7 +1,7 @@
 ---
 number: 12
 title: Fingerprint the model's definitions for human review
-status: proposed
+status: accepted
 date: 2026-11-14
 links:
 - target: 9
