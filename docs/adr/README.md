@@ -11,3 +11,5 @@
 * [11. Check the Rust core with Kani for bounded inputs](0011-check-the-rust-core-with-kani-for-bounded-inputs.md)
 * [12. Fingerprint the model's definitions for human review](0012-fingerprint-the-model-s-definitions-for-human-review.md)
 * [13. Measure the tests by mutating the Rust core](0013-measure-the-tests-by-mutating-the-rust-core.md)
+* [14. Store MIDI notes in clips, relative to the clip](0014-store-midi-notes-in-clips-relative-to-the-clip.md)
+* [15. Render offline from a modelled note schedule and a built-in instrument](0015-render-offline-from-a-modelled-note-schedule-and-a-built-in-instrument.md)
