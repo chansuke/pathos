@@ -7,6 +7,7 @@ Pathos.Error [type] 211275ed775efc52
 Pathos.Error.name [def] 9ac1e4fb1a2b1645
 Pathos.History [type] 5d81c1c115678fe3
 Pathos.History.edit [def] 91924b7728ee7b95
+Pathos.History.initial [def] 33840a0dd586ebbd
 Pathos.History.render [def] 2ea6261af0a36014
 Pathos.History.respond [def] 6ff1ac725a3413f2
 Pathos.Project [type] 0bc9cfdfc012a1de
@@ -23,7 +24,10 @@ Pathos.Tick [def] 3be1b1a7d699d63c
 Pathos.clipsWellFormed [def] 0053f46e6d2baed4
 Pathos.clipsWellFormed.ordered [def] 4f318ebbca3b1199
 Pathos.insertTempo [def] 0cfeca0565e25984
+Pathos.maxTick [def] 05959c9fda2c7509
+Pathos.maxUsPerQuarter [def] dcb36158de9935fc
 Pathos.microsTimesPpq [def] 5606337533cf3827
+Pathos.ppq [def] 7801c4c6ec9617ae
 Pathos.step [def] 8a34fbd2670d06ed
 Pathos.tempoWellFormed [def] ccd64ad1f9422f99
 Pathos.tempoWellFormed.ordered [def] c9edbf8ae2ee85a4

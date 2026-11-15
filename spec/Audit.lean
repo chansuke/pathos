@@ -96,14 +96,17 @@ def auditDefinitions (env : Environment) (decls : List (Name × ConstantInfo)) :
     MetaM (Array String) := do
   -- Lean generates recursors, projections and derived instances inside the
   -- range of a type. They change only when the type does, which its own line
-  -- already shows.
+  -- already shows. A range is a pair of lines, so it is compared only with the
+  -- types of the same module.
   let types ← decls.filterMapM fun
     | (name, .inductInfo _) => return (← findDeclarationRanges? name).map (name, ·.range)
     | _ => return none
   let defs ← decls.filterMapM fun (name, info) => do
     let some kind := kind info | return none
     let some range ← findDeclarationRanges? name | return none
-    if types.any fun (type, outer) => type != name && within range.range outer then
+    let module := env.getModuleIdxFor? name
+    if types.any fun (type, outer) =>
+        type != name && env.getModuleIdxFor? type == module && within range.range outer then
       return none
     return some (name, kind)
   let defs := defs.toArray.qsort (fun a b => a.1.toString < b.1.toString)
