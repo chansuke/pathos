@@ -1,7 +1,7 @@
 ---
 number: 14
 title: Store MIDI notes in clips, relative to the clip
-status: proposed
+status: accepted
 date: 2026-11-15
 ---
 

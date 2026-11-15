@@ -1,7 +1,7 @@
 ---
 number: 15
 title: Render offline from a modelled note schedule and a built-in instrument
-status: proposed
+status: accepted
 date: 2026-11-15
 ---
 
