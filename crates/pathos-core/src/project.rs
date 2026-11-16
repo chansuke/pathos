@@ -439,6 +439,11 @@ impl Project {
 
     /// The time of `tick` in microseconds from the start, rounded down.
     pub fn tick_to_micros(&self, tick: Tick) -> u128 {
+        self.micros_times_ppq(tick) / u128::from(PPQ)
+    }
+
+    /// [`PPQ`] times the microseconds from the start to `tick`.
+    pub(crate) fn micros_times_ppq(&self, tick: Tick) -> u128 {
         let mut micros_times_ppq: u128 = 0;
         for (index, change) in self.tempo.iter().enumerate() {
             // Each tempo applies up to the next change, the last one forever.
@@ -452,6 +457,6 @@ impl Project {
                 break;
             }
         }
-        micros_times_ppq / u128::from(PPQ)
+        micros_times_ppq
     }
 }
