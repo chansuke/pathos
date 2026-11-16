@@ -28,3 +28,8 @@ jobs:
         run: nix develop -c cargo clippy --workspace --all-targets -- -D warnings
       - name: Check licenses, advisories and sources
         run: nix develop -c cargo deny check
+      # The render needs no model, so its tests run here rather than with the
+      # differential tests. Its hash test fails if a render depends on the
+      # platform (ADR 15).
+      - name: Test the render
+        run: nix develop -c cargo test -p pathos-render
