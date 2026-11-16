@@ -13,7 +13,17 @@ piano roll for the selected clip:
   removes it.
 - `Ctrl-Z` and `Ctrl-Shift-Z` (`Cmd` on macOS) undo and redo.
 
-There is no playback yet.
+- `Space` plays and stops, and `Home` returns to the start. Playback is the
+  offline render of ADR 15, sample for sample.
+
+To listen without the window, play a short phrase on the default output device:
+
+```sh
+cargo run -p pathos-playback --example play
+```
+
+On Linux, the dev shell points ALSA at the PipeWire and PulseAudio plugins from
+nixpkgs, since the host's own plugins do not load into Nix's alsa-lib.
 
 ## Build
 

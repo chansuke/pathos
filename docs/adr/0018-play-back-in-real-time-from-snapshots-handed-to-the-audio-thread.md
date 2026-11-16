@@ -52,9 +52,10 @@ empties it, so the room the audio thread saw cannot vanish before it fills it. `
 no snapshot is used after it is freed, that each is freed exactly once, and
 that the audio thread settles on the last one published.
 
-The transport (play, stop and seek) is sent to the audio thread through a
-second bounded queue, and the audio thread reports the frame it plays through
-an atomic. The transport is not part of the project and is not a command.
+The transport (play, stop and seek) is set by the UI thread in atomics that the
+audio thread reads at the start of each block; a seek it has not yet followed
+is replaced by a later one. The audio thread reports the frame it plays through
+another atomic. The transport is not part of the project and is not a command.
 
 `pathos-render` gains a player that renders block by block and keeps each
 sounding note's phase between blocks. Its blocks, joined, are the offline
