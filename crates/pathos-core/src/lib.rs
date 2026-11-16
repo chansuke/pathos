@@ -9,5 +9,6 @@ mod project;
 
 pub use history::{Edit, History};
 pub use project::{
-    Clip, Command, EditError, MAX_TICK, MAX_US_PER_QUARTER, PPQ, Project, TempoChange, Tick,
+    Clip, Command, EditError, MAX_PITCH, MAX_TICK, MAX_US_PER_QUARTER, MAX_VELOCITY, Note, PPQ,
+    Project, TempoChange, Tick,
 };

@@ -19,17 +19,45 @@ def maxTick : Tick := 2 ^ 40
 /-- Slowest accepted tempo, in microseconds per quarter note (1 BPM). -/
 def maxUsPerQuarter : Nat := 60000000
 
+/-- The highest MIDI pitch. -/
+def maxPitch : Nat := 127
+
+/-- The highest MIDI velocity. Velocity 0 means note-off in MIDI, so a note's
+velocity is at least 1. -/
+def maxVelocity : Nat := 127
+
 /-- From `tick` onwards a quarter note lasts `usPerQuarter` microseconds. -/
 structure TempoChange where
   tick : Tick
   usPerQuarter : Nat
   deriving Repr, DecidableEq
 
+/-- A MIDI note, starting `start` ticks after the start of its clip (ADR 14). -/
+structure Note where
+  start : Tick
+  length : Nat
+  pitch : Nat
+  velocity : Nat
+  deriving Repr, DecidableEq
+
+/-- The tick just past the end of the note, relative to its clip. -/
+def Note.stop (n : Note) : Tick := n.start + n.length
+
+/-- Two notes overlap when they share a pitch and a tick. -/
+def Note.overlaps (a b : Note) : Bool :=
+  a.pitch == b.pitch && a.start < b.stop && b.start < a.stop
+
+/-- The order of notes in a clip: by start, then pitch. -/
+def Note.before (a b : Note) : Bool :=
+  a.start < b.start || (a.start == b.start && a.pitch < b.pitch)
+
 structure Clip where
   id : Nat
   track : Nat
   start : Tick
   length : Nat
+  /-- Ordered by start, then pitch. -/
+  notes : List Note := []
   deriving Repr, DecidableEq
 
 /-- The tick just past the end of the clip. -/
@@ -64,6 +92,10 @@ inductive Command where
   /-- Set the tempo from `tick` onwards, replacing a change already there. -/
   | setTempo (tick : Tick) (usPerQuarter : Nat)
   | removeTempo (tick : Tick)
+  /-- Add a note to a clip, `start` ticks after the start of the clip. -/
+  | addNote (id : Nat) (start : Tick) (length : Nat) (pitch : Nat) (velocity : Nat)
+  /-- Remove the note of `pitch` that starts `start` ticks into a clip. -/
+  | removeNote (id : Nat) (start : Tick) (pitch : Nat)
   deriving Repr, DecidableEq
 
 inductive Error where
@@ -76,6 +108,11 @@ inductive Error where
   | invalidTempo
   | initialTempo
   | noTempoChange
+  | emptyNote
+  | invalidNote
+  | noteOutsideClip
+  | noteOverlap
+  | unknownNote
   | nothingToUndo
   | nothingToRedo
   deriving Repr, DecidableEq
@@ -97,6 +134,13 @@ def insertTempo (change : TempoChange) : List TempoChange → List TempoChange
     if change.tick < head.tick then change :: head :: rest
     else if change.tick == head.tick then change :: rest
     else head :: insertTempo change rest
+
+/-- Insert a note, keeping the notes ordered by start, then pitch. -/
+def insertNote (note : Note) : List Note → List Note
+  | [] => [note]
+  | head :: rest =>
+    if note.before head then note :: head :: rest
+    else head :: insertNote note rest
 
 /-- Apply a command to `p`, where `nextClipId` is the id the next created clip
 receives. Returns the project and the id after the command. A rejected command
@@ -121,9 +165,17 @@ def step (p : Project) (nextClipId : Nat) : Command → Except Error (Project ×
   | .splitClip id tick => do
     let some clip := p.findClip id | throw .unknownClip
     if tick ≤ clip.start || tick ≥ clip.stop then throw .splitOutsideClip
-    let left := { clip with length := tick - clip.start }
+    -- Notes are relative to their clip. A note that starts before the split
+    -- stays in the left clip and ends at the split at the latest (ADR 14).
+    let offset := tick - clip.start
+    let left := { clip with
+      length := offset
+      notes := clip.notes.filter (·.start < offset) |>.map fun n =>
+        { n with length := min n.length (offset - n.start) } }
     let right : Clip :=
-      { id := nextClipId, track := clip.track, start := tick, length := clip.stop - tick }
+      { id := nextClipId, track := clip.track, start := tick, length := clip.stop - tick
+        notes := clip.notes.filter (·.start ≥ offset) |>.map fun n =>
+          { n with start := n.start - offset } }
     pure ({ p with clips := p.replaceClip left ++ [right] }, nextClipId + 1)
   | .deleteClip id => do
     let some _ := p.findClip id | throw .unknownClip
@@ -136,6 +188,21 @@ def step (p : Project) (nextClipId : Nat) : Command → Except Error (Project ×
     if tick == 0 then throw .initialTempo
     if !p.tempo.any (·.tick == tick) then throw .noTempoChange
     pure ({ p with tempo := p.tempo.filter (·.tick != tick) }, nextClipId)
+  | .addNote id start length pitch velocity => do
+    let some clip := p.findClip id | throw .unknownClip
+    if length == 0 then throw .emptyNote
+    if pitch > maxPitch || velocity == 0 || velocity > maxVelocity then throw .invalidNote
+    if start + length > clip.length then throw .noteOutsideClip
+    let note : Note := { start, length, pitch, velocity }
+    if clip.notes.any note.overlaps then throw .noteOverlap
+    let clip := { clip with notes := insertNote note clip.notes }
+    pure ({ p with clips := p.replaceClip clip }, nextClipId)
+  | .removeNote id start pitch => do
+    let some clip := p.findClip id | throw .unknownClip
+    let named (n : Note) := n.start == start && n.pitch == pitch
+    if !clip.notes.any named then throw .unknownNote
+    let clip := { clip with notes := clip.notes.filter (!named ·) }
+    pure ({ p with clips := p.replaceClip clip }, nextClipId)
 
 /-- `ppq` times the microseconds from the first tempo change to `tick`. -/
 def microsTimesPpq : List TempoChange → Tick → Nat
@@ -166,12 +233,28 @@ where
   valid (change : TempoChange) : Bool :=
     change.usPerQuarter > 0 && change.usPerQuarter ≤ maxUsPerQuarter && change.tick ≤ maxTick
 
+/-- Notes are non-empty, inside the clip, valid MIDI, ordered by start then
+pitch, and no two of one pitch overlap. -/
+def notesWellFormed (c : Clip) : Bool :=
+  c.notes.all (fun n =>
+    n.length > 0 && n.stop ≤ c.length && n.pitch ≤ maxPitch
+      && n.velocity > 0 && n.velocity ≤ maxVelocity)
+    && disjoint c.notes && ordered c.notes
+where
+  disjoint : List Note → Bool
+    | [] => true
+    | n :: rest => !rest.any n.overlaps && disjoint rest
+  ordered : List Note → Bool
+    | [] => true
+    | [_] => true
+    | current :: next :: rest => current.before next && ordered (next :: rest)
+
 /-- Clips are non-empty, in range, on existing tracks, ordered by id below
-`nextClipId`, and no two overlap. -/
+`nextClipId`, no two overlap, and their notes are well-formed. -/
 def clipsWellFormed (p : Project) (nextClipId : Nat) : Bool :=
   p.clips.all (fun c =>
     c.length > 0 && c.stop ≤ maxTick && c.track < p.trackCount && c.id < nextClipId
-      && !p.collides c)
+      && !p.collides c && notesWellFormed c)
     && ordered p.clips
 where
   ordered : List Clip → Bool
@@ -231,6 +314,43 @@ theorem step_new_clip_ids (p q : Project) (n n' : Nat) (c : Command)
       | simp_all [bind, Except.bind, pure, Except.pure, throw, throwThe, MonadExceptOf.throw])
   all_goals obtain ⟨rfl, rfl⟩ := ok
   all_goals simp_all
+
+/-- Splitting a clip keeps the onset of every note: some clip after the split
+has a note of the same pitch and velocity starting at the same tick (ADR 14). -/
+theorem splitClip_keeps_onsets (p q : Project) (n n' id tick : Nat) (clip : Clip)
+    (note : Note) (found : p.findClip id = some clip) (mem : note ∈ clip.notes)
+    (ok : step p n (.splitClip id tick) = .ok (q, n')) :
+    ∃ c ∈ q.clips, ∃ m ∈ c.notes,
+      c.start + m.start = clip.start + note.start ∧ m.pitch = note.pitch
+        ∧ m.velocity = note.velocity := by
+  have inClips : clip ∈ p.clips := List.mem_of_find?_eq_some found
+  have sameId : clip.id = id := by
+    simpa using List.find?_some found
+  simp only [step, found] at ok
+  split at ok
+  · simp_all [throw, throwThe, MonadExceptOf.throw, bind, Except.bind]
+  · simp only [pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at ok
+    obtain ⟨rfl, rfl⟩ := ok
+    rename_i inside
+    simp only [Bool.or_eq_true, decide_eq_true_eq, not_or, Nat.not_le] at inside
+    by_cases early : note.start < tick - clip.start
+    · refine ⟨{ clip with
+          length := tick - clip.start
+          notes := clip.notes.filter (·.start < tick - clip.start) |>.map fun n =>
+            { n with length := min n.length (tick - clip.start - n.start) } }, ?_, ?_⟩
+      · refine List.mem_append_left _ (List.mem_map.mpr ⟨clip, inClips, ?_⟩)
+        simp [sameId]
+      · exact ⟨{ note with length := min note.length (tick - clip.start - note.start) },
+          List.mem_map.mpr ⟨note, List.mem_filter.mpr ⟨mem, by simpa using early⟩, rfl⟩,
+          rfl, rfl, rfl⟩
+    · refine ⟨_, List.mem_append_right _ (List.mem_singleton_self _), ?_⟩
+      refine ⟨{ note with start := note.start - (tick - clip.start) },
+        List.mem_map.mpr ⟨note, List.mem_filter.mpr ⟨mem, by simpa using early⟩, rfl⟩,
+        ?_, rfl, rfl⟩
+      have after : tick - clip.start ≤ note.start := Nat.not_lt.mp early
+      have inside : clip.start < tick := inside.1
+      show tick + (note.start - (tick - clip.start)) = clip.start + note.start
+      omega
 
 /-- Later ticks are never earlier in time. -/
 theorem microsTimesPpq_monotone :

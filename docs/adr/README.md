@@ -13,3 +13,4 @@
 * [13. Measure the tests by mutating the Rust core](0013-measure-the-tests-by-mutating-the-rust-core.md)
 * [14. Store MIDI notes in clips, relative to the clip](0014-store-midi-notes-in-clips-relative-to-the-clip.md)
 * [15. Render offline from a modelled note schedule and a built-in instrument](0015-render-offline-from-a-modelled-note-schedule-and-a-built-in-instrument.md)
+* [16. Leave splitting a clip with notes out of the Kani harnesses](0016-leave-splitting-a-clip-with-notes-out-of-the-kani-harnesses.md)
