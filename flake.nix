@@ -81,6 +81,8 @@
                   cargo-deny
                   cargo-mutants
                   lean4
+                  # TLC checks the TLA+ specifications in tla/ (ADR 17).
+                  tlaplus
                   clippy
                   rust-analyzer
                   rustfmt

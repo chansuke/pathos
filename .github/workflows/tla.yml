@@ -1,0 +1,31 @@
+name: TLA+
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # Check each TLA+ specification with TLC on the constants in its .cfg file
+  # (ADR 17).
+  tlc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
+      - name: Check the specifications
+        working-directory: tla
+        run: |
+          for spec in *.tla; do
+            echo "::group::$spec"
+            nix develop -c tlc -workers auto -metadir "$RUNNER_TEMP/states" "${spec%.tla}" \
+              | tee "$RUNNER_TEMP/tlc.txt"
+            echo "::endgroup::"
+            # TLC exits with 0 on some errors, such as a parse error.
+            grep -q 'Model checking completed. No error has been found.' "$RUNNER_TEMP/tlc.txt"
+          done
