@@ -37,7 +37,7 @@ Chosen option: "Keep notes in one list in the Rust core, check notes only where
 they can change, and leave a split with notes to the other tests", because it
 keeps every other harness as cheap as before and every rule tested.
 
-The decision has four parts, each measured locally with Kani 0.68.0 and
+The decision has five parts, each measured locally with Kani 0.68.0 and
 MiniSat, with three or four harnesses running side by side:
 
 * The Rust core keeps the notes of all clips in one list ordered by clip id,
@@ -53,8 +53,12 @@ MiniSat, with three or four harnesses running side by side:
   version. A split with notes is checked by the differential tests, the
   mutants of ADR 13, hand-written expected values, and the model's proved
   theorem `splitClip_keeps_onsets`.
+* The Rust core finds the notes of a clip by a linear search. An insertion
+  moves the notes after it anyway, and with a binary search
+  `remove_note_of_1` took 451 s locally and ran past ten minutes in CI; with a
+  linear search it took 149 s.
 * The Kani workflow runs each harness in its own job, listed by
-  `cargo kani list`, so that the note harnesses, which take from 211 s to 451 s,
+  `cargo kani list`, so that the note harnesses, which take minutes each,
   run side by side and each has a runner's memory to itself. A job named
   `verify` passes when every harness has passed.
 
@@ -70,8 +74,9 @@ This amends ADR 11: Kani checks a split only on clips without notes.
   checked for every input, only on generated and hand-written ones.
 * Bad, because the Rust core and the model store notes differently, so the
   correspondence rests on the differential tests.
-* Bad, because the slowest harness took 451 s locally, close to the limit; CI
-  is slower than this machine, so a larger harness may need a new measurement.
+* Bad, because CI took about twice as long as this machine, so the slowest
+  harness, `add_note_to_2_notes` at 277 s locally, is close to the limit, and a
+  larger harness needs a new measurement.
 
 ### Confirmation
 
