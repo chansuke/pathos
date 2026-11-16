@@ -214,27 +214,6 @@ apply_harness!(
 );
 
 apply_harness!(
-    split_clip_with_1_note,
-    tempo = 1,
-    clips = 1,
-    notes = 1,
-    Command::SplitClip {
-        id: kani::any(),
-        tick: kani::any(),
-    }
-);
-apply_harness!(
-    split_clip_with_2_notes,
-    tempo = 1,
-    clips = 1,
-    notes = 2,
-    Command::SplitClip {
-        id: kani::any(),
-        tick: kani::any(),
-    }
-);
-
-apply_harness!(
     delete_clip_of_1,
     tempo = 1,
     clips = 1,
@@ -353,12 +332,9 @@ fn harnesses(command: Command) -> &'static [fn()] {
         Command::AddTrack => &[add_track],
         Command::AddClip { .. } => &[add_clip_to_0_clips, add_clip_to_1_clip, add_clip_to_2_clips],
         Command::MoveClip { .. } => &[move_clip_of_1, move_clip_of_2],
-        Command::SplitClip { .. } => &[
-            split_clip_of_1,
-            split_clip_of_2,
-            split_clip_with_1_note,
-            split_clip_with_2_notes,
-        ],
+        // A split of a clip with notes did not finish within ten minutes, so
+        // its notes are left to the differential tests (ADR 16).
+        Command::SplitClip { .. } => &[split_clip_of_1, split_clip_of_2],
         Command::DeleteClip { .. } => {
             &[delete_clip_of_1, delete_clip_of_2, delete_clip_with_1_note]
         }
