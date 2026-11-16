@@ -14,3 +14,4 @@
 * [14. Store MIDI notes in clips, relative to the clip](0014-store-midi-notes-in-clips-relative-to-the-clip.md)
 * [15. Render offline from a modelled note schedule and a built-in instrument](0015-render-offline-from-a-modelled-note-schedule-and-a-built-in-instrument.md)
 * [16. Leave splitting a clip with notes out of the Kani harnesses](0016-leave-splitting-a-clip-with-notes-out-of-the-kani-harnesses.md)
+* [17. Specify the concurrent parts in TLA+ and check them with TLC](0017-specify-the-concurrent-parts-in-tla-and-check-them-with-tlc.md)
