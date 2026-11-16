@@ -3738,6 +3738,7 @@ name = "pathos"
 version = "0.1.0"
 dependencies = [
  "gpui",
+ "pathos-core",
 ]
 
 [[package]]

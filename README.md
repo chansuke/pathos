@@ -2,7 +2,18 @@
 
 A DAW (digital audio workstation) built with [gpui](https://gpui.rs).
 
-Early development: the app currently opens an empty window.
+Early development. The window shows a timeline of tracks and MIDI clips and a
+piano roll for the selected clip:
+
+- `T` adds a track, and a double click on a lane adds a one-bar clip.
+- Dragging a clip moves it by whole beats, also to another track.
+- `S` splits the selected clip at the beat under the pointer, and `Delete`
+  deletes it.
+- A click in the piano roll adds a sixteenth note, and a click on a note
+  removes it.
+- `Ctrl-Z` and `Ctrl-Shift-Z` (`Cmd` on macOS) undo and redo.
+
+There is no playback yet.
 
 ## Build
 
