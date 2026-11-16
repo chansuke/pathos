@@ -3784,6 +3784,8 @@ version = "0.1.0"
 dependencies = [
  "gpui",
  "pathos-core",
+ "pathos-playback",
+ "pathos-render",
 ]
 
 [[package]]
@@ -3798,6 +3800,8 @@ name = "pathos-playback"
 version = "0.1.0"
 dependencies = [
  "loom",
+ "pathos-core",
+ "pathos-render",
 ]
 
 [[package]]

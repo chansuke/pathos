@@ -8,6 +8,10 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[dependencies]
+pathos-core = { path = "../pathos-core" }
+pathos-render = { path = "../pathos-render" }
+
 [target.'cfg(loom)'.dependencies]
 loom = "0.7"
 
