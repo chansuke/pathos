@@ -10,8 +10,8 @@ publish = false
 
 [dependencies]
 cpal = "0.18"
-pathos-core = { path = "../pathos-core" }
-pathos-render = { path = "../pathos-render" }
+pathos-core = { path = "../pathos-core", version = "0.1.0" }
+pathos-render = { path = "../pathos-render", version = "0.1.0" }
 
 [target.'cfg(loom)'.dependencies]
 loom = "0.7"
