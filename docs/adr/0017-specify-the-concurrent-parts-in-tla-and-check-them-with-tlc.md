@@ -77,8 +77,10 @@ below are settled.
 
 ### Confirmation
 
-Not yet defined. It is expected to be a CI job that checks each TLA+
-specification with TLC and fails on any violated invariant or property.
+The TLA+ workflow checks each specification in `tla/` with TLC on the constants
+in its `.cfg` file, and fails unless TLC reports that no error was found. The
+Rust code that implements a specification is tested with loom, and the tests
+assert the specification's invariants (ADR 18).
 
 ## Pros and Cons of the Options
 
@@ -114,13 +116,27 @@ specification with TLC and fails on any violated invariant or property.
 
 ## More Information
 
-Open questions:
+Answers to the questions this record left open:
 
-* How the Rust code is held to a TLA+ specification. One option is to record
-  traces of the Rust code under loom and check each with TLC against the
-  specification; it has not been tried.
-* Which bound each specification is checked at, so that CI stays within its
-  time limits.
+* The Rust code is held to a specification by loom tests that assert the same
+  invariants. Recording traces under loom and checking them with TLC is left
+  for later, when a specification is large enough to need it.
+* Each specification is checked at the largest constants that TLC finishes in
+  about a minute on CI. `SnapshotHandoff` at 15 snapshots and a queue of 3 has
+  16 268 states and takes about 2 seconds; at 40 snapshots and a queue of 6,
+  TLC had not finished after 20 minutes.
+
+The first comparison of tla-ts 0.0.10 with TLC 1.7.4, on `SnapshotHandoff`
+with one worker:
+
+* Both found the same numbers of states, 252 at 6 snapshots and 16 268 at 15.
+* Both reported the same violation for each of four broken variants of the
+  specification: no room check, a leak, freeing the snapshot being played and
+  no fairness for draining the queue.
+* tla-ts took 1.1 seconds and 0.2 GB at 15 snapshots, TLC 2.3 seconds and
+  0.5 GB, including the start of the JVM.
+* At 40 snapshots, tla-ts ran for 9 minutes, used 6.6 GB and stopped without
+  a result; why is not known yet.
 
 References:
 
