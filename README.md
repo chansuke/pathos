@@ -60,6 +60,12 @@ lake -d spec build
 cargo test -p pathos-core
 ```
 
+To listen to the built-in instrument, render a short phrase to a WAV file:
+
+```sh
+cargo run -p pathos-render --example render -- phrase.wav
+```
+
 Design decisions are recorded in [docs/adr](docs/adr/README.md).
 
 ## Note

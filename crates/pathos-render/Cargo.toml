@@ -13,3 +13,4 @@ pathos-core = { path = "../pathos-core" }
 
 [dev-dependencies]
 proptest = "1"
+hound = "3"
