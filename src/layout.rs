@@ -2,7 +2,9 @@
 //! what lies under a point of the window. Coordinates are logical pixels from
 //! the top left of the window.
 
-use pathos_core::{Clip, Note, PPQ, Project, Tick};
+use std::num::NonZeroU32;
+
+use pathos_core::{Clip, MAX_TICK, Note, PPQ, Project, Tick};
 
 /// The height of the status line above the timeline.
 pub const STATUS_HEIGHT: f32 = 28.0;
@@ -95,6 +97,22 @@ pub fn note_rect(project: &Project, note: &Note) -> Option<Rect> {
 /// The width of the piano roll of `clip`.
 pub fn roll_width(clip: &Clip) -> f32 {
     ticks_to_width(clip.length, ROLL_BEAT_WIDTH)
+}
+
+/// Where the playhead is drawn when frame `frame` at `sample_rate` plays: on
+/// the last tick that starts at or before it.
+pub fn playhead_x(project: &Project, sample_rate: NonZeroU32, frame: u64) -> f32 {
+    let at = |tick: Tick| project.tick_to_micros(tick) * u128::from(sample_rate.get()) / 1_000_000;
+    let (mut low, mut high) = (0, MAX_TICK);
+    while low < high {
+        let middle = low + (high - low).div_ceil(2);
+        if at(middle) <= u128::from(frame) {
+            low = middle;
+        } else {
+            high = middle - 1;
+        }
+    }
+    HEADER_WIDTH + ticks_to_width(low, BEAT_WIDTH)
 }
 
 /// What lies under `(x, y)`, with the piano roll showing the clip `selected`.
@@ -305,6 +323,25 @@ mod tests {
                 pitch: 60
             }
         );
+    }
+
+    #[test]
+    fn the_playhead_follows_the_tempo() {
+        let mut history = History::default();
+        let rate = NonZeroU32::new(48_000).unwrap();
+        // 120 BPM: a beat is 24 000 frames.
+        let x = |history: &History, frame| playhead_x(history.present(), rate, frame);
+        assert_eq!(x(&history, 0), HEADER_WIDTH);
+        assert_eq!(x(&history, 24_000), HEADER_WIDTH + BEAT_WIDTH);
+        assert!(x(&history, 23_999) < HEADER_WIDTH + BEAT_WIDTH);
+        // 60 BPM from beat 1: beat 2 is 48 000 frames after beat 1.
+        history
+            .edit(Edit::Apply(Command::SetTempo {
+                tick: PPQ,
+                us_per_quarter: 1_000_000,
+            }))
+            .unwrap();
+        assert_eq!(x(&history, 72_000), HEADER_WIDTH + 2.0 * BEAT_WIDTH);
     }
 
     #[test]
