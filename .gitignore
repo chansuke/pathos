@@ -1,3 +1,5 @@
 /target
 /result
 /spec/.lake
+/mutants.out
+/mutants.out.old
