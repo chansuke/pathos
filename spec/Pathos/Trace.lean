@@ -1,4 +1,5 @@
 import Pathos.History
+import Pathos.Schedule
 
 /-!
 # Trace format
@@ -14,6 +15,8 @@ inductive Request where
   | edit (edit : Edit)
   /-- Ask for the time of a tick in microseconds. -/
   | micros (tick : Tick)
+  /-- Ask for the note schedule at a sample rate (ADR 15). -/
+  | schedule (rate : Nat)
 
 def Request.parse (line : String) : Option Request := do
   let words := line.splitOn " " |>.filter (· ≠ "")
@@ -33,6 +36,7 @@ def Request.parse (line : String) : Option Request := do
   | "undo", [] => some (.edit .undo)
   | "redo", [] => some (.edit .redo)
   | "micros", [tick] => some (.micros tick)
+  | "schedule", [rate] => some (.schedule rate)
   | _, _ => none
 
 def Error.name : Error → String
@@ -62,10 +66,16 @@ def History.render (h : History) : String :=
   s!"tracks={p.trackCount} next={h.nextClipId} tempo={",".intercalate tempo} "
     ++ s!"clips={",".intercalate clips} undo={h.past.length} redo={h.future.length}"
 
+def Event.render : Event → String
+  | .off sample track pitch => s!"off:{sample}:{track}:{pitch}"
+  | .on sample track pitch velocity => s!"on:{sample}:{track}:{pitch}:{velocity}"
+
 /-- Handle one request, returning the history to continue with and the reply.
 A project that breaks the invariant is reported in place of its state. -/
 def History.respond (h : History) : Request → History × String
   | .micros tick => (h, s!"micros {h.present.tickToMicros tick}")
+  | .schedule rate =>
+    (h, s!"schedule {",".intercalate (h.present.schedule rate |>.map Event.render)}")
   | .edit edit =>
     match h.edit edit with
     | .error e => (h, s!"err {e.name}")
