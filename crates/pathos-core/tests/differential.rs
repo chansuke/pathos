@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::process::{Command as Process, Stdio};
 
 use pathos_core::{
-    Command, Edit, EditError, History, MAX_PITCH, MAX_TICK, MAX_US_PER_QUARTER, MAX_VELOCITY,
+    Command, Edit, EditError, Event, History, MAX_PITCH, MAX_TICK, MAX_US_PER_QUARTER, MAX_VELOCITY,
 };
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
@@ -20,6 +20,7 @@ use proptest::test_runner::TestRunner;
 enum Request {
     Edit(Edit),
     Micros(u64),
+    Schedule(u64),
 }
 
 impl Request {
@@ -27,6 +28,7 @@ impl Request {
     fn encode(&self) -> String {
         match *self {
             Request::Micros(tick) => format!("micros {tick}"),
+            Request::Schedule(rate) => format!("schedule {rate}"),
             Request::Edit(Edit::Undo) => "undo".into(),
             Request::Edit(Edit::Redo) => "redo".into(),
             Request::Edit(Edit::Apply(command)) => match command {
@@ -133,6 +135,7 @@ request_kinds! {
     Request::Edit(Edit::Undo) => "undo",
     Request::Edit(Edit::Redo) => "redo",
     Request::Micros(_) => "micros",
+    Request::Schedule(_) => "schedule",
 }
 
 fn render(history: &History) -> String {
@@ -176,6 +179,22 @@ fn render(history: &History) -> String {
     )
 }
 
+fn render_event(event: &Event) -> String {
+    match *event {
+        Event::Off {
+            sample,
+            track,
+            pitch,
+        } => format!("off:{sample}:{track}:{pitch}"),
+        Event::On {
+            sample,
+            track,
+            pitch,
+            velocity,
+        } => format!("on:{sample}:{track}:{pitch}:{velocity}"),
+    }
+}
+
 /// The replies of this crate to a trace, starting from an empty project.
 fn core_replies(trace: &[Request]) -> Vec<String> {
     let mut history = History::default();
@@ -183,6 +202,15 @@ fn core_replies(trace: &[Request]) -> Vec<String> {
         .iter()
         .map(|request| match *request {
             Request::Micros(tick) => format!("micros {}", history.present().tick_to_micros(tick)),
+            Request::Schedule(rate) => {
+                let events: Vec<String> = history
+                    .present()
+                    .schedule(rate)
+                    .iter()
+                    .map(render_event)
+                    .collect();
+                format!("schedule {}", events.join(","))
+            }
             Request::Edit(edit) => match history.edit(edit) {
                 Ok(()) => format!("ok {}", render(&history)),
                 Err(error) => format!("err {}", error_name(error)),
@@ -366,12 +394,45 @@ fn note_pair() -> impl Strategy<Value = Vec<Request>> {
         })
 }
 
+/// Common rates, and low ones at which notes share a sample or fall within
+/// one, with the limits of the range.
+fn sample_rate() -> impl Strategy<Value = u64> {
+    prop_oneof![
+        4 => prop_oneof![Just(44_100), Just(48_000), Just(96_000)],
+        4 => 1u64..2000,
+        1 => prop_oneof![Just(0), Just(u64::MAX)],
+    ]
+}
+
+/// A few notes added to one clip, then the schedule. Most schedules of a
+/// trace are otherwise empty, which leaves the order of events barely tested.
+fn notes_then_schedule() -> impl Strategy<Value = Vec<Request>> {
+    let note = (note_start(), note_length(), pitch(), velocity());
+    (0u64..2, prop::collection::vec(note, 1..6), sample_rate()).prop_map(|(id, notes, rate)| {
+        let mut requests: Vec<Request> = notes
+            .into_iter()
+            .map(|(start, length, pitch, velocity)| {
+                Request::Edit(Edit::Apply(Command::AddNote {
+                    id,
+                    start,
+                    length,
+                    pitch,
+                    velocity,
+                }))
+            })
+            .collect();
+        requests.push(Request::Schedule(rate));
+        requests
+    })
+}
+
 fn request() -> impl Strategy<Value = Request> {
     prop_oneof![
         12 => command().prop_map(|command| Request::Edit(Edit::Apply(command))),
         2 => Just(Request::Edit(Edit::Undo)),
         1 => Just(Request::Edit(Edit::Redo)),
         2 => tick().prop_map(Request::Micros),
+        1 => sample_rate().prop_map(Request::Schedule),
     ]
 }
 
@@ -388,6 +449,7 @@ fn trace() -> impl Strategy<Value = Vec<Request>> {
     let chunk = prop_oneof![
         12 => request().prop_map(|request| vec![request]),
         1 => note_pair(),
+        1 => notes_then_schedule(),
     ];
     prop::collection::vec(chunk, 1..100).prop_map(|chunks| chunks.concat())
 }
@@ -607,7 +669,59 @@ fn core_agrees_with_model_on_boundaries() {
             remove_note(1, 0, 60),
         ],
     ];
-    for trace in traces.into_iter().chain(note_traces) {
+    let add_note_to = |id, start, length, pitch| {
+        apply(AddNote {
+            id,
+            start,
+            length,
+            pitch,
+            velocity: 100,
+        })
+    };
+    let schedule_traces = [
+        // A note-off comes before a note-on at the same sample, a note within
+        // one sample has no events, and no rate is too low or too high.
+        vec![
+            apply(AddTrack),
+            add_clip(0, 960),
+            add_note(0, 480, 60, 100),
+            add_note(480, 480, 60, 90),
+            add_note(0, 1, 62, 1),
+            Request::Schedule(48_000),
+            Request::Schedule(1),
+            Request::Schedule(2),
+            Request::Schedule(1920),
+            Request::Schedule(0),
+            Request::Schedule(u64::MAX),
+        ],
+        // Events at one sample are ordered by track, then pitch, and a tempo
+        // change during a note moves only its note-off.
+        vec![
+            apply(AddTrack),
+            apply(AddTrack),
+            apply(AddClip {
+                track: 1,
+                start: 0,
+                length: 960,
+            }),
+            add_clip(0, 960),
+            add_note_to(0, 0, 960, 64),
+            add_note_to(0, 0, 960, 60),
+            add_note_to(1, 0, 480, 67),
+            Request::Schedule(48_000),
+            set_tempo(480, 1_000_000),
+            Request::Schedule(48_000),
+        ],
+        // The last tick at the highest rate.
+        vec![
+            apply(AddTrack),
+            add_clip(MAX_TICK - 960, 960),
+            add_note(0, 960, 60, 100),
+            set_tempo(0, MAX_US_PER_QUARTER),
+            Request::Schedule(u64::MAX),
+        ],
+    ];
+    for trace in traces.into_iter().chain(note_traces).chain(schedule_traces) {
         assert_eq!(core_replies(&trace), model_replies(&trace), "{trace:?}");
     }
 }
