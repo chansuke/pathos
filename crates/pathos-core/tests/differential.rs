@@ -9,7 +9,9 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command as Process, Stdio};
 
-use pathos_core::{Command, Edit, EditError, History, MAX_TICK, MAX_US_PER_QUARTER};
+use pathos_core::{
+    Command, Edit, EditError, History, MAX_PITCH, MAX_TICK, MAX_US_PER_QUARTER, MAX_VELOCITY,
+};
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 use proptest::test_runner::TestRunner;
@@ -42,6 +44,16 @@ impl Request {
                     us_per_quarter,
                 } => format!("set-tempo {tick} {us_per_quarter}"),
                 Command::RemoveTempo { tick } => format!("remove-tempo {tick}"),
+                Command::AddNote {
+                    id,
+                    start,
+                    length,
+                    pitch,
+                    velocity,
+                } => format!("add-note {id} {start} {length} {pitch} {velocity}"),
+                Command::RemoveNote { id, start, pitch } => {
+                    format!("remove-note {id} {start} {pitch}")
+                }
             },
         }
     }
@@ -72,6 +84,11 @@ errors! {
     InvalidTempo => "invalid-tempo",
     InitialTempo => "initial-tempo",
     NoTempoChange => "no-tempo-change",
+    EmptyNote => "empty-note",
+    InvalidNote => "invalid-note",
+    NoteOutsideClip => "note-outside-clip",
+    NoteOverlap => "note-overlap",
+    UnknownNote => "unknown-note",
     NothingToUndo => "nothing-to-undo",
     NothingToRedo => "nothing-to-redo",
 }
@@ -111,6 +128,8 @@ request_kinds! {
     Request::Edit(Edit::Apply(Command::DeleteClip { .. })) => "delete-clip",
     Request::Edit(Edit::Apply(Command::SetTempo { .. })) => "set-tempo",
     Request::Edit(Edit::Apply(Command::RemoveTempo { .. })) => "remove-tempo",
+    Request::Edit(Edit::Apply(Command::AddNote { .. })) => "add-note",
+    Request::Edit(Edit::Apply(Command::RemoveNote { .. })) => "remove-note",
     Request::Edit(Edit::Undo) => "undo",
     Request::Edit(Edit::Redo) => "redo",
     Request::Micros(_) => "micros",
@@ -126,7 +145,26 @@ fn render(history: &History) -> String {
     let clips: Vec<String> = project
         .clips()
         .iter()
-        .map(|clip| format!("{}:{}:{}:{}", clip.id, clip.track, clip.start, clip.length))
+        .map(|clip| {
+            let notes: Vec<String> = clip
+                .notes
+                .iter()
+                .map(|note| {
+                    format!(
+                        "{}/{}/{}/{}",
+                        note.start, note.length, note.pitch, note.velocity
+                    )
+                })
+                .collect();
+            format!(
+                "{}:{}:{}:{}[{}]",
+                clip.id,
+                clip.track,
+                clip.start,
+                clip.length,
+                notes.join(";")
+            )
+        })
         .collect();
     format!(
         "tracks={} next={} tempo={} clips={} undo={} redo={}",
@@ -230,13 +268,53 @@ fn us_per_quarter() -> impl Strategy<Value = u64> {
     ]
 }
 
+/// A start within a clip, mostly on the grid so that notes meet, end where a
+/// clip ends or start where a split falls.
+fn note_start() -> impl Strategy<Value = u64> {
+    prop_oneof![
+        8 => (0u64..3).prop_map(|step| step * GRID),
+        2 => 0u64..2000,
+        1 => Just(u64::MAX),
+    ]
+}
+
+fn note_length() -> impl Strategy<Value = u64> {
+    prop_oneof![
+        8 => (1u64..3).prop_map(|step| step * GRID),
+        2 => 1u64..1000,
+        2 => prop_oneof![Just(0), Just(u64::MAX)],
+    ]
+}
+
+/// Mostly a few pitches, so that notes of one pitch overlap and a removal
+/// names an existing note.
+fn pitch() -> impl Strategy<Value = u64> {
+    let max = u64::from(MAX_PITCH);
+    prop_oneof![
+        12 => 60u64..62,
+        1 => 0..=max,
+        2 => prop_oneof![Just(max), Just(max + 1), Just(256), Just(u64::MAX)],
+    ]
+}
+
+fn velocity() -> impl Strategy<Value = u64> {
+    let max = u64::from(MAX_VELOCITY);
+    prop_oneof![
+        12 => 1..=max,
+        2 => prop_oneof![Just(0), Just(max), Just(max + 1), Just(256), Just(u64::MAX)],
+    ]
+}
+
 fn command() -> impl Strategy<Value = Command> {
     let track = 0u64..3;
     // Few clips exist in a trace, so small ids mostly name one, and the rest
     // are unknown.
     let id = 0u64..4;
+    // Notes need a clip, and the first clips of a trace are the most likely to
+    // exist.
+    let note_clip = 0u64..2;
     prop_oneof![
-        3 => Just(Command::AddTrack),
+        5 => Just(Command::AddTrack),
         6 => (track.clone(), tick(), length())
             .prop_map(|(track, start, length)| Command::AddClip { track, start, length }),
         4 => (id.clone(), track, tick())
@@ -246,7 +324,47 @@ fn command() -> impl Strategy<Value = Command> {
         3 => (tick(), us_per_quarter())
             .prop_map(|(tick, us_per_quarter)| Command::SetTempo { tick, us_per_quarter }),
         3 => tick().prop_map(|tick| Command::RemoveTempo { tick }),
+        3 => (note_clip.clone(), note_start(), note_length(), pitch(), velocity()).prop_map(
+            |(id, start, length, pitch, velocity)| Command::AddNote {
+                id,
+                start,
+                length,
+                pitch,
+                velocity,
+            }
+        ),
+        2 => (note_clip, note_start(), pitch())
+            .prop_map(|(id, start, pitch)| Command::RemoveNote { id, start, pitch }),
     ]
+}
+
+/// A note followed by a request about the same note: its removal, or a note of
+/// the same pitch starting during it. A state-free generator rarely names an
+/// existing note, so this reaches those rules whenever the first note is added.
+fn note_pair() -> impl Strategy<Value = Vec<Request>> {
+    (
+        0u64..2,
+        note_start(),
+        note_length(),
+        pitch(),
+        velocity(),
+        0u64..GRID,
+    )
+        .prop_flat_map(|(id, start, length, pitch, velocity, offset)| {
+            let add = |start, length| {
+                Request::Edit(Edit::Apply(Command::AddNote {
+                    id,
+                    start,
+                    length,
+                    pitch,
+                    velocity,
+                }))
+            };
+            let first = add(start, length);
+            let remove = Request::Edit(Edit::Apply(Command::RemoveNote { id, start, pitch }));
+            let overlapping = add(start.saturating_add(offset), GRID);
+            prop_oneof![Just(vec![first, remove]), Just(vec![first, overlapping])]
+        })
 }
 
 fn request() -> impl Strategy<Value = Request> {
@@ -268,7 +386,11 @@ fn cases() -> u32 {
 }
 
 fn trace() -> impl Strategy<Value = Vec<Request>> {
-    prop::collection::vec(request(), 1..80)
+    let chunk = prop_oneof![
+        12 => request().prop_map(|request| vec![request]),
+        1 => note_pair(),
+    ];
+    prop::collection::vec(chunk, 1..100).prop_map(|chunks| chunks.concat())
 }
 
 proptest! {
@@ -402,7 +524,91 @@ fn core_agrees_with_model_on_boundaries() {
             Request::Edit(Edit::Redo),
         ],
     ];
-    for trace in traces {
+    let add_note = |start, length, pitch, velocity| {
+        apply(AddNote {
+            id: 0,
+            start,
+            length,
+            pitch,
+            velocity,
+        })
+    };
+    let remove_note = |id, start, pitch| apply(RemoveNote { id, start, pitch });
+    let max_pitch = u64::from(MAX_PITCH);
+    let max_velocity = u64::from(MAX_VELOCITY);
+    let note_traces = [
+        // A note may end at the end of its clip but not beyond it, and notes
+        // of one pitch may touch but not share a tick.
+        vec![
+            apply(AddTrack),
+            add_clip(0, 480),
+            add_note(240, 240, 60, 100),
+            add_note(241, 240, 61, 100),
+            add_note(0, 240, 60, 100),
+            add_note(239, 2, 60, 100),
+            add_note(239, 2, 62, 100),
+            add_note(0, u64::MAX, 63, 100),
+            add_note(u64::MAX, 1, 63, 100),
+        ],
+        // The limits of pitch and velocity.
+        vec![
+            apply(AddTrack),
+            add_clip(0, 480),
+            add_note(0, 1, max_pitch, max_velocity),
+            add_note(0, 1, max_pitch + 1, 1),
+            add_note(0, 1, 0, 1),
+            add_note(1, 1, 0, 0),
+            add_note(1, 1, 0, max_velocity + 1),
+            add_note(1, 1, 256 + 60, 1),
+            add_note(1, 1, 60, 256 + 1),
+        ],
+        // A split gives each note to the clip it starts in, and shortens a
+        // note that crosses it (ADR 14).
+        vec![
+            apply(AddTrack),
+            add_clip(240, 960),
+            add_note(0, 240, 60, 100),
+            add_note(240, 240, 61, 100),
+            add_note(241, 480, 62, 100),
+            add_note(480, 1, 63, 100),
+            split(0, 480),
+            split(0, 241),
+            split(1, 721),
+            remove_note(1, 0, 61),
+            remove_note(3, 0, 62),
+            remove_note(1, 240, 63),
+        ],
+        // Moving a clip keeps its notes, and undo restores a removed one.
+        vec![
+            apply(AddTrack),
+            add_clip(0, 480),
+            add_note(0, 240, 60, 100),
+            apply(MoveClip {
+                id: 0,
+                track: 0,
+                start: 960,
+            }),
+            remove_note(0, 0, 61),
+            remove_note(0, 1, 60),
+            remove_note(0, 0, 60),
+            Request::Edit(Edit::Undo),
+            apply(DeleteClip { id: 0 }),
+            Request::Edit(Edit::Undo),
+        ],
+        // Which note error is reported when several apply.
+        vec![
+            add_note(0, 0, u64::MAX, 0),
+            apply(AddTrack),
+            add_clip(0, 240),
+            add_note(u64::MAX, 0, u64::MAX, 0),
+            add_note(u64::MAX, 1, u64::MAX, 0),
+            add_note(u64::MAX, 1, 60, 100),
+            add_note(0, 240, 60, 100),
+            add_note(0, 240, 60, 100),
+            remove_note(1, 0, 60),
+        ],
+    ];
+    for trace in traces.into_iter().chain(note_traces) {
         assert_eq!(core_replies(&trace), model_replies(&trace), "{trace:?}");
     }
 }
