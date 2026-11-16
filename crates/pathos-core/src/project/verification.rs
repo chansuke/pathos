@@ -1,7 +1,7 @@
 //! Kani proof harnesses (ADR 11). Each harness checks this crate's code for
 //! every value of its inputs, including that no arithmetic overflows and
 //! nothing panics, on a project with a fixed number of tempo changes, clips
-//! and notes per clip.
+//! and notes.
 //!
 //! Lengths are fixed per harness rather than chosen by Kani, which keeps each
 //! problem small enough for the solver. Clip commands leave the tempo alone and
@@ -15,8 +15,8 @@
 
 use super::*;
 
-/// `Project.wellFormed` of the Lean model, written so that it does not overflow
-/// on the arbitrary values it is asked to reject.
+/// `Project.wellFormed` of the Lean model without the notes, written so that
+/// it does not overflow on the arbitrary values it is asked to reject.
 fn well_formed(p: &Project, next_clip_id: u64) -> bool {
     let tempo_valid = |change: &TempoChange| {
         change.us_per_quarter > 0
@@ -40,51 +40,55 @@ fn well_formed(p: &Project, next_clip_id: u64) -> bool {
             .iter()
             .all(|clip| clip.track < p.track_count && clip.id < next_clip_id && !p.collides(clip))
         && p.clips.windows(2).all(|pair| pair[0].id < pair[1].id)
-        && p.clips.iter().all(notes_well_formed)
 }
 
-/// `notesWellFormed` of the Lean model, checking the range before `Note::stop`.
-fn notes_well_formed(clip: &Clip) -> bool {
-    let notes = &clip.notes;
-    notes.iter().all(|note| {
+/// `notesWellFormed` of the Lean model for every clip, together with the order
+/// of the one list that holds the notes. Assumes `well_formed`. A note's clip
+/// is found by a linear search: a binary search here made `move_clip_of_2`
+/// take ten times as long.
+fn notes_well_formed(p: &Project) -> bool {
+    let key = |(id, note): &(u64, Note)| (*id, note.key());
+    let valid = |(id, note): &(u64, Note)| {
         note.length > 0
-            && note
-                .start
-                .checked_add(note.length)
-                .is_some_and(|stop| stop <= clip.length)
             && note.pitch <= MAX_PITCH
             && (1..=MAX_VELOCITY).contains(&note.velocity)
-    }) && notes.windows(2).all(|pair| pair[0].key() < pair[1].key())
-        && notes
-            .iter()
-            .enumerate()
-            .all(|(index, note)| notes[index + 1..].iter().all(|later| !note.overlaps(later)))
-}
-
-/// Any clip with `NOTES` notes.
-fn any_clip<const NOTES: usize>() -> Clip {
-    let notes: [Note; NOTES] = kani::any();
-    Clip {
-        id: kani::any(),
-        track: kani::any(),
-        start: kani::any(),
-        length: kani::any(),
-        notes: notes.to_vec(),
+            && p.clips.iter().any(|clip| {
+                clip.id == *id
+                    && note
+                        .start
+                        .checked_add(note.length)
+                        .is_some_and(|stop| stop <= clip.length)
+            })
+    };
+    let notes = &p.notes;
+    // Check the range first: the overlap check assumes it.
+    if !(notes.iter().all(valid) && notes.windows(2).all(|pair| key(&pair[0]) < key(&pair[1]))) {
+        return false;
     }
+    for i in 0..notes.len() {
+        for j in i + 1..notes.len() {
+            if notes[i].0 == notes[j].0 && notes[i].1.overlaps(&notes[j].1) {
+                return false;
+            }
+        }
+    }
+    true
 }
 
-/// Any well-formed project with `TEMPO` tempo changes and `CLIPS` clips of
-/// `NOTES` notes each, with the id the next created clip receives.
+/// Any well-formed project with `TEMPO` tempo changes, `CLIPS` clips and
+/// `NOTES` notes, with the id the next created clip receives.
 fn any_project<const TEMPO: usize, const CLIPS: usize, const NOTES: usize>() -> (Project, u64) {
     let tempo: [TempoChange; TEMPO] = kani::any();
-    let clips: [Clip; CLIPS] = std::array::from_fn(|_| any_clip::<NOTES>());
+    let clips: [Clip; CLIPS] = kani::any();
+    let notes: [(u64, Note); NOTES] = kani::any();
     let project = Project {
         track_count: kani::any(),
         tempo: tempo.to_vec(),
         clips: clips.to_vec(),
+        notes: notes.to_vec(),
     };
     let next_clip_id = kani::any();
-    kani::assume(well_formed(&project, next_clip_id));
+    kani::assume(well_formed(&project, next_clip_id) && notes_well_formed(&project));
     (project, next_clip_id)
 }
 
@@ -103,11 +107,17 @@ fn check_apply<const TEMPO: usize, const CLIPS: usize, const NOTES: usize>(comma
     if let Ok((next, next_clip_id_after)) = result {
         assert!(next_clip_id <= next_clip_id_after);
         assert!(well_formed(&next, next_clip_id_after));
+        // Checking the notes is most of the cost of a harness. Without notes
+        // to start from, only `AddNote` can produce one, so the check would
+        // only show that other commands do not.
+        if NOTES > 0 || matches!(command, Command::AddNote { .. }) {
+            assert!(notes_well_formed(&next));
+        }
     }
 }
 
 /// Declares a harness that applies `$command` to a project with `$tempo`
-/// tempo changes and `$clips` clips of `$notes` notes each, none when omitted.
+/// tempo changes, `$clips` clips and `$notes` notes, none when omitted.
 /// A command adds at most one element to a list of at most two, so loops run
 /// at most three times.
 macro_rules! apply_harness {
@@ -231,6 +241,13 @@ apply_harness!(
     Command::DeleteClip { id: kani::any() }
 );
 apply_harness!(
+    delete_clip_with_1_note,
+    tempo = 1,
+    clips = 1,
+    notes = 1,
+    Command::DeleteClip { id: kani::any() }
+);
+apply_harness!(
     delete_clip_of_2,
     tempo = 1,
     clips = 2,
@@ -342,7 +359,9 @@ fn harnesses(command: Command) -> &'static [fn()] {
             split_clip_with_1_note,
             split_clip_with_2_notes,
         ],
-        Command::DeleteClip { .. } => &[delete_clip_of_1, delete_clip_of_2],
+        Command::DeleteClip { .. } => {
+            &[delete_clip_of_1, delete_clip_of_2, delete_clip_with_1_note]
+        }
         Command::SetTempo { .. } => &[set_tempo_with_1, set_tempo_with_2],
         Command::RemoveTempo { .. } => &[remove_tempo_with_2],
         Command::AddNote { .. } => &[add_note_to_0_notes, add_note_to_1_note, add_note_to_2_notes],
@@ -362,6 +381,7 @@ fn tick_to_micros_does_not_overflow() {
         track_count: 0,
         tempo: tempo.to_vec(),
         clips: Vec::new(),
+        notes: Vec::new(),
     };
     kani::assume(well_formed(&project, 0));
     let tick: Tick = kani::any();
