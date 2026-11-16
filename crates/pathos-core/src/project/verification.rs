@@ -1,11 +1,13 @@
 //! Kani proof harnesses (ADR 11). Each harness checks this crate's code for
 //! every value of its inputs, including that no arithmetic overflows and
-//! nothing panics, on a project with a fixed number of tempo changes and clips.
+//! nothing panics, on a project with a fixed number of tempo changes, clips
+//! and notes per clip.
 //!
 //! Lengths are fixed per harness rather than chosen by Kani, which keeps each
 //! problem small enough for the solver. Clip commands leave the tempo alone and
 //! tempo commands leave the clips alone, so each harness varies only the list
-//! its command reads.
+//! its command reads. Only the commands that read or write notes are given
+//! notes.
 //!
 //! The harnesses use MiniSat. On `split_clip_of_1` in CI, CaDiCaL (Kani's
 //! default) took 877 s and 16 GB, the whole memory of the runner; Kissat took
@@ -38,13 +40,44 @@ fn well_formed(p: &Project, next_clip_id: u64) -> bool {
             .iter()
             .all(|clip| clip.track < p.track_count && clip.id < next_clip_id && !p.collides(clip))
         && p.clips.windows(2).all(|pair| pair[0].id < pair[1].id)
+        && p.clips.iter().all(notes_well_formed)
 }
 
-/// Any well-formed project with `TEMPO` tempo changes and `CLIPS` clips, with
-/// the id the next created clip receives.
-fn any_project<const TEMPO: usize, const CLIPS: usize>() -> (Project, u64) {
+/// `notesWellFormed` of the Lean model, checking the range before `Note::stop`.
+fn notes_well_formed(clip: &Clip) -> bool {
+    let notes = &clip.notes;
+    notes.iter().all(|note| {
+        note.length > 0
+            && note
+                .start
+                .checked_add(note.length)
+                .is_some_and(|stop| stop <= clip.length)
+            && note.pitch <= MAX_PITCH
+            && (1..=MAX_VELOCITY).contains(&note.velocity)
+    }) && notes.windows(2).all(|pair| pair[0].key() < pair[1].key())
+        && notes
+            .iter()
+            .enumerate()
+            .all(|(index, note)| notes[index + 1..].iter().all(|later| !note.overlaps(later)))
+}
+
+/// Any clip with `NOTES` notes.
+fn any_clip<const NOTES: usize>() -> Clip {
+    let notes: [Note; NOTES] = kani::any();
+    Clip {
+        id: kani::any(),
+        track: kani::any(),
+        start: kani::any(),
+        length: kani::any(),
+        notes: notes.to_vec(),
+    }
+}
+
+/// Any well-formed project with `TEMPO` tempo changes and `CLIPS` clips of
+/// `NOTES` notes each, with the id the next created clip receives.
+fn any_project<const TEMPO: usize, const CLIPS: usize, const NOTES: usize>() -> (Project, u64) {
     let tempo: [TempoChange; TEMPO] = kani::any();
-    let clips: [Clip; CLIPS] = kani::any();
+    let clips: [Clip; CLIPS] = std::array::from_fn(|_| any_clip::<NOTES>());
     let project = Project {
         track_count: kani::any(),
         tempo: tempo.to_vec(),
@@ -58,8 +91,8 @@ fn any_project<const TEMPO: usize, const CLIPS: usize>() -> (Project, u64) {
 /// `step_preserves_wellFormed` and `step_nextClipId_le` of the Lean model, for
 /// the Rust code: the command either fails or keeps the project well-formed,
 /// and never lowers the next clip id.
-fn check_apply<const TEMPO: usize, const CLIPS: usize>(command: Command) {
-    let (project, next_clip_id) = any_project::<TEMPO, CLIPS>();
+fn check_apply<const TEMPO: usize, const CLIPS: usize, const NOTES: usize>(command: Command) {
+    let (project, next_clip_id) = any_project::<TEMPO, CLIPS, NOTES>();
     // Each increment of a counter takes one accepted edit, so a history cannot
     // reach `u64::MAX` of either.
     kani::assume(project.track_count < u64::MAX && next_clip_id < u64::MAX);
@@ -74,15 +107,25 @@ fn check_apply<const TEMPO: usize, const CLIPS: usize>(command: Command) {
 }
 
 /// Declares a harness that applies `$command` to a project with `$tempo`
-/// tempo changes and `$clips` clips. A command adds at most one element to a
-/// list of at most two, so loops run at most three times.
+/// tempo changes and `$clips` clips of `$notes` notes each, none when omitted.
+/// A command adds at most one element to a list of at most two, so loops run
+/// at most three times.
 macro_rules! apply_harness {
     ($name:ident, tempo = $tempo:literal, clips = $clips:literal, $command:expr) => {
+        apply_harness!($name, tempo = $tempo, clips = $clips, notes = 0, $command);
+    };
+    (
+        $name:ident,
+        tempo = $tempo:literal,
+        clips = $clips:literal,
+        notes = $notes:literal,
+        $command:expr
+    ) => {
         #[kani::proof]
         #[kani::unwind(4)]
         #[kani::solver(minisat)]
         fn $name() {
-            check_apply::<$tempo, $clips>($command);
+            check_apply::<$tempo, $clips, $notes>($command);
         }
     };
 }
@@ -161,6 +204,27 @@ apply_harness!(
 );
 
 apply_harness!(
+    split_clip_with_1_note,
+    tempo = 1,
+    clips = 1,
+    notes = 1,
+    Command::SplitClip {
+        id: kani::any(),
+        tick: kani::any(),
+    }
+);
+apply_harness!(
+    split_clip_with_2_notes,
+    tempo = 1,
+    clips = 1,
+    notes = 2,
+    Command::SplitClip {
+        id: kani::any(),
+        tick: kani::any(),
+    }
+);
+
+apply_harness!(
     delete_clip_of_1,
     tempo = 1,
     clips = 1,
@@ -201,6 +265,69 @@ apply_harness!(
     Command::RemoveTempo { tick: kani::any() }
 );
 
+apply_harness!(
+    add_note_to_0_notes,
+    tempo = 1,
+    clips = 1,
+    notes = 0,
+    Command::AddNote {
+        id: kani::any(),
+        start: kani::any(),
+        length: kani::any(),
+        pitch: kani::any(),
+        velocity: kani::any(),
+    }
+);
+apply_harness!(
+    add_note_to_1_note,
+    tempo = 1,
+    clips = 1,
+    notes = 1,
+    Command::AddNote {
+        id: kani::any(),
+        start: kani::any(),
+        length: kani::any(),
+        pitch: kani::any(),
+        velocity: kani::any(),
+    }
+);
+apply_harness!(
+    add_note_to_2_notes,
+    tempo = 1,
+    clips = 1,
+    notes = 2,
+    Command::AddNote {
+        id: kani::any(),
+        start: kani::any(),
+        length: kani::any(),
+        pitch: kani::any(),
+        velocity: kani::any(),
+    }
+);
+
+apply_harness!(
+    remove_note_of_1,
+    tempo = 1,
+    clips = 1,
+    notes = 1,
+    Command::RemoveNote {
+        id: kani::any(),
+        start: kani::any(),
+        pitch: kani::any(),
+    }
+);
+apply_harness!(
+    remove_note_of_2,
+    tempo = 1,
+    clips = 1,
+    notes = 2,
+    Command::RemoveNote {
+        id: kani::any(),
+        start: kani::any(),
+        pitch: kani::any(),
+    }
+);
+
 /// The harnesses of each command. A new command does not compile until it is
 /// given one here.
 #[allow(dead_code)]
@@ -209,10 +336,17 @@ fn harnesses(command: Command) -> &'static [fn()] {
         Command::AddTrack => &[add_track],
         Command::AddClip { .. } => &[add_clip_to_0_clips, add_clip_to_1_clip, add_clip_to_2_clips],
         Command::MoveClip { .. } => &[move_clip_of_1, move_clip_of_2],
-        Command::SplitClip { .. } => &[split_clip_of_1, split_clip_of_2],
+        Command::SplitClip { .. } => &[
+            split_clip_of_1,
+            split_clip_of_2,
+            split_clip_with_1_note,
+            split_clip_with_2_notes,
+        ],
         Command::DeleteClip { .. } => &[delete_clip_of_1, delete_clip_of_2],
         Command::SetTempo { .. } => &[set_tempo_with_1, set_tempo_with_2],
         Command::RemoveTempo { .. } => &[remove_tempo_with_2],
+        Command::AddNote { .. } => &[add_note_to_0_notes, add_note_to_1_note, add_note_to_2_notes],
+        Command::RemoveNote { .. } => &[remove_note_of_1, remove_note_of_2],
     }
 }
 
