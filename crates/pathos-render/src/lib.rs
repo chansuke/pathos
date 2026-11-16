@@ -11,6 +11,8 @@ use std::num::NonZeroU32;
 
 use pathos_core::{Event, Project};
 
+pub mod wav;
+
 /// The frequency of each MIDI pitch in hertz, in equal temperament with A4
 /// (pitch 69) at 440 Hz.
 const FREQUENCIES: [f32; 128] = frequencies();
