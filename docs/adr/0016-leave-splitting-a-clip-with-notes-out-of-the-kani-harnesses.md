@@ -74,9 +74,10 @@ This amends ADR 11: Kani checks a split only on clips without notes.
   checked for every input, only on generated and hand-written ones.
 * Bad, because the Rust core and the model store notes differently, so the
   correspondence rests on the differential tests.
-* Bad, because CI took about twice as long as this machine, so the slowest
-  harness, `add_note_to_2_notes` at 277 s locally, is close to the limit, and a
-  larger harness needs a new measurement.
+* Bad, because local times do not predict CI well: with a binary search,
+  `add_note_to_2_notes` took 321 s locally and ran past ten minutes in CI;
+  with a linear search, 277 s locally and a five-minute job in CI. A larger
+  harness has to be measured in CI.
 
 ### Confirmation
 
