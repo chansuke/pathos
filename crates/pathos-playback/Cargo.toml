@@ -9,6 +9,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+cpal = "0.18"
 pathos-core = { path = "../pathos-core" }
 pathos-render = { path = "../pathos-render" }
 
