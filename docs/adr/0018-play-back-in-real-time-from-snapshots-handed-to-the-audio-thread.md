@@ -1,7 +1,7 @@
 ---
 number: 18
 title: Play back in real time from snapshots handed to the audio thread
-status: proposed
+status: accepted
 date: 2026-11-16
 ---
 

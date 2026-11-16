@@ -1,7 +1,7 @@
 ---
 number: 17
 title: Specify the concurrent parts in TLA+ and check them with TLC
-status: proposed
+status: accepted
 date: 2026-11-16
 ---
 
@@ -60,8 +60,8 @@ and on their time. tla-ts takes TLC's place only if they agree on every
 specification for some time, in the same way ADR 11 chose a solver by
 measurement.
 
-This ADR stays proposed until playback is designed and the open questions
-below are settled.
+Playback (ADR 18) is the first part designed this way, and the questions this
+record first left open are answered below.
 
 ### Consequences
 
