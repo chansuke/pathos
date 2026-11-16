@@ -13,7 +13,7 @@ gpui = "0.2.2"
 pathos-core = { path = "crates/pathos-core", version = "0.1.0" }
 
 [workspace]
-members = ["crates/pathos-core", "crates/pathos-render"]
+members = ["crates/pathos-core", "crates/pathos-playback", "crates/pathos-render"]
 
 [workspace.package]
 version = "0.1.0"
