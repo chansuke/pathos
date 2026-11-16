@@ -43,12 +43,12 @@ immutable allocation. It publishes the snapshot by swapping it into a
 one-place slot. A snapshot it swaps out was never seen by the audio thread, so
 the UI thread frees it.
 
-At the start of each block, the audio thread checks that a bounded queue back
-to the UI thread has room, swaps the slot empty, and pushes the snapshot it was
-playing onto the queue. Without room it keeps playing the snapshot it has. The
-UI thread drains the queue and frees what it finds. The queue has one producer
-and one consumer, so the room the audio thread saw cannot vanish before it
-pushes. `tla/SnapshotHandoff.tla` specifies this protocol, and TLC checks that
+At the start of each block, the audio thread checks that a second one-place
+slot back to the UI thread, a queue of one, is empty, swaps the first slot
+empty, and puts the snapshot it was playing into the second. Without room it
+keeps playing the snapshot it has. The UI thread empties the second slot and
+frees what it finds. Only the audio thread fills it and only the UI thread
+empties it, so the room the audio thread saw cannot vanish before it fills it. `tla/SnapshotHandoff.tla` specifies this protocol, and TLC checks that
 no snapshot is used after it is freed, that each is freed exactly once, and
 that the audio thread settles on the last one published.
 
@@ -62,8 +62,9 @@ render bit for bit, and a property test checks this for generated projects and
 block sizes. The schedule is computed at the device's rate, so no resampling
 happens on the way to the device.
 
-Audio output uses `cpal`, which covers ALSA, CoreAudio and WASAPI. The slot is
-an atomic pointer, and the queues are `rtrb` ring buffers.
+Audio output uses `cpal`, which covers ALSA, CoreAudio and WASAPI. Both slots
+are atomic pointers rather than an `rtrb` ring buffer, so that loom can run the
+hand-off; the specification holds for any length of queue.
 
 ### Consequences
 
@@ -76,7 +77,7 @@ an atomic pointer, and the queues are `rtrb` ring buffers.
 * Bad, because each edit builds a whole new snapshot, which costs time on the
   UI thread for large projects. Sharing unchanged parts between snapshots can
   come later.
-* Bad, because the slot holds an unsafe atomic pointer, which only the
+* Bad, because the slots hold unsafe atomic pointers, which only the
   specification and loom tests check.
 * Bad, because the Linux build needs ALSA in the dev shell and on CI.
 * Neutral, because an edit lands at the next block boundary, a few
