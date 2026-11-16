@@ -223,16 +223,36 @@ impl Project {
         self.notes[self.note_range(id)].iter().map(|(_, note)| note)
     }
 
-    /// Where the notes of the clip `id` lie in `self.notes`.
+    /// Where the notes of the clip `id` lie in `self.notes`. The searches
+    /// here and in `note_index` are linear: an insertion moves the notes after
+    /// it anyway, and a binary search made the Kani harnesses of note commands
+    /// run past their time limit (ADR 16).
     fn note_range(&self, id: u64) -> Range<usize> {
-        let start = self.notes.partition_point(|(clip, _)| *clip < id);
-        let end = self.notes.partition_point(|(clip, _)| *clip <= id);
-        start..end
+        let start = self
+            .notes
+            .iter()
+            .position(|(clip, _)| *clip >= id)
+            .unwrap_or(self.notes.len());
+        let count = self.notes[start..]
+            .iter()
+            .take_while(|(clip, _)| *clip == id)
+            .count();
+        start..start + count
     }
 
+    /// The index of the note of the clip `id` with `key`, or where it would be
+    /// inserted.
     fn note_index(&self, id: u64, key: (Tick, u64)) -> Result<usize, usize> {
-        self.notes
-            .binary_search_by_key(&(id, key), |(clip, note)| (*clip, note.key()))
+        let wanted = (id, key);
+        match self
+            .notes
+            .iter()
+            .position(|(clip, note)| (*clip, note.key()) >= wanted)
+        {
+            Some(at) if (self.notes[at].0, self.notes[at].1.key()) == wanted => Ok(at),
+            Some(at) => Err(at),
+            None => Err(self.notes.len()),
+        }
     }
 
     fn clip_index(&self, id: u64) -> Option<usize> {
