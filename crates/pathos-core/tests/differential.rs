@@ -146,9 +146,8 @@ fn render(history: &History) -> String {
         .clips()
         .iter()
         .map(|clip| {
-            let notes: Vec<String> = clip
-                .notes
-                .iter()
+            let notes: Vec<String> = project
+                .notes(clip.id)
                 .map(|note| {
                     format!(
                         "{}/{}/{}/{}",

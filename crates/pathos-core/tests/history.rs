@@ -105,11 +105,13 @@ fn split_gives_each_note_to_the_clip_it_starts_in() {
     add_note(&mut history, 0, note(480, 240, 67));
     apply(&mut history, Command::SplitClip { id: 0, tick: 1440 });
 
-    let clips = history.present().clips();
+    let project = history.present();
+    let notes = |id| project.notes(id).copied().collect::<Vec<_>>();
+    let clips = project.clips();
     assert_eq!(clips[0].length, 480);
-    assert_eq!(clips[0].notes, [note(0, 480, 60), note(240, 240, 64)]);
+    assert_eq!(notes(0), [note(0, 480, 60), note(240, 240, 64)]);
     assert_eq!((clips[1].start, clips[1].length), (1440, 480));
-    assert_eq!(clips[1].notes, [note(0, 240, 67)]);
+    assert_eq!(notes(1), [note(0, 240, 67)]);
 }
 
 /// Notes are ordered by start, then pitch, whatever the order they were added
@@ -129,8 +131,9 @@ fn notes_are_ordered_by_start_then_pitch() {
     for added in [note(240, 240, 60), note(0, 240, 64), note(0, 240, 60)] {
         add_note(&mut history, 0, added);
     }
+    let notes: Vec<Note> = history.present().notes(0).copied().collect();
     assert_eq!(
-        history.present().clips()[0].notes,
+        notes,
         [note(0, 240, 60), note(0, 240, 64), note(240, 240, 60)]
     );
 }

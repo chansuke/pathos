@@ -1,4 +1,5 @@
 use std::fmt;
+use std::ops::Range;
 
 #[cfg(kani)]
 mod verification;
@@ -56,14 +57,13 @@ impl Note {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(kani, derive(kani::Arbitrary))]
 pub struct Clip {
     pub id: u64,
     pub track: u64,
     pub start: Tick,
     pub length: u64,
-    /// Ordered by start, then pitch.
-    pub notes: Vec<Note>,
 }
 
 impl Clip {
@@ -179,6 +179,10 @@ pub struct Project {
     tempo: Vec<TempoChange>,
     /// Ordered by id.
     clips: Vec<Clip>,
+    /// The notes of every clip with the id of their clip, ordered by clip id,
+    /// then start, then pitch. The model keeps notes inside their clip; one
+    /// list keeps `Clip` a plain value, which the Kani harnesses rely on.
+    notes: Vec<(u64, Note)>,
 }
 
 impl Default for Project {
@@ -191,6 +195,7 @@ impl Default for Project {
                 us_per_quarter: 500_000,
             }],
             clips: Vec::new(),
+            notes: Vec::new(),
         }
     }
 }
@@ -211,6 +216,23 @@ impl Project {
 
     pub fn clips(&self) -> &[Clip] {
         &self.clips
+    }
+
+    /// The notes of the clip `id`, ordered by start, then pitch.
+    pub fn notes(&self, id: u64) -> impl Iterator<Item = &Note> {
+        self.notes[self.note_range(id)].iter().map(|(_, note)| note)
+    }
+
+    /// Where the notes of the clip `id` lie in `self.notes`.
+    fn note_range(&self, id: u64) -> Range<usize> {
+        let start = self.notes.partition_point(|(clip, _)| *clip < id);
+        let end = self.notes.partition_point(|(clip, _)| *clip <= id);
+        start..end
+    }
+
+    fn note_index(&self, id: u64, key: (Tick, u64)) -> Result<usize, usize> {
+        self.notes
+            .binary_search_by_key(&(id, key), |(clip, note)| (*clip, note.key()))
     }
 
     fn clip_index(&self, id: u64) -> Option<usize> {
@@ -255,7 +277,6 @@ impl Project {
                     track,
                     start,
                     length,
-                    notes: Vec::new(),
                 };
                 if self.collides(&clip) {
                     return Err(EditError::Overlap);
@@ -268,14 +289,14 @@ impl Project {
                 if track >= self.track_count {
                     return Err(EditError::UnknownTrack);
                 }
-                let clip = &self.clips[index];
+                let clip = self.clips[index];
                 if exceeds_max_tick(start, clip.length) {
                     return Err(EditError::OutOfRange);
                 }
                 let moved = Clip {
                     track,
                     start,
-                    ..clip.clone()
+                    ..clip
                 };
                 if self.collides(&moved) {
                     return Err(EditError::Overlap);
@@ -284,45 +305,40 @@ impl Project {
             }
             Command::SplitClip { id, tick } => {
                 let index = self.clip_index(id).ok_or(EditError::UnknownClip)?;
-                let clip = &self.clips[index];
+                let clip = self.clips[index];
                 if tick <= clip.start || tick >= clip.stop() {
                     return Err(EditError::SplitOutsideClip);
                 }
-                // A note that starts before the split stays in the left clip
-                // and ends at the split at the latest (ADR 14).
-                let offset = tick - clip.start;
-                let (left, right): (Vec<Note>, Vec<Note>) =
-                    clip.notes.iter().partition(|note| note.start < offset);
-                let right = Clip {
+                next.clips[index].length = tick - clip.start;
+                next.clips.push(Clip {
                     id: next_clip_id,
                     track: clip.track,
                     start: tick,
                     length: clip.stop() - tick,
-                    notes: right
-                        .into_iter()
-                        .map(|note| Note {
-                            start: note.start - offset,
-                            ..note
-                        })
-                        .collect(),
-                };
-                next.clips[index] = Clip {
-                    length: offset,
-                    notes: left
-                        .into_iter()
-                        .map(|note| Note {
-                            length: note.length.min(offset - note.start),
-                            ..note
-                        })
-                        .collect(),
-                    ..clip.clone()
-                };
-                next.clips.push(right);
+                });
+                // A note that starts before the split stays in the left clip
+                // and ends at the split at the latest (ADR 14).
+                let offset = tick - clip.start;
+                let range = self.note_range(id);
+                let split = range.start
+                    + self.notes[range.clone()].partition_point(|(_, note)| note.start < offset);
+                for (_, note) in &mut next.notes[range.start..split] {
+                    note.length = note.length.min(offset - note.start);
+                }
+                // The new clip has the highest id, so its notes come last.
+                let moved = range.end - split;
+                next.notes[split..].rotate_left(moved);
+                let tail = next.notes.len() - moved;
+                for (clip, note) in &mut next.notes[tail..] {
+                    *clip = next_clip_id;
+                    note.start -= offset;
+                }
                 next_clip_id += 1;
             }
             Command::DeleteClip { id } => {
                 let index = self.clip_index(id).ok_or(EditError::UnknownClip)?;
                 next.clips.remove(index);
+                next.notes.drain(self.note_range(id));
             }
             Command::SetTempo {
                 tick,
@@ -377,28 +393,25 @@ impl Project {
                     }
                     _ => return Err(EditError::InvalidNote),
                 };
-                let clip = &self.clips[index];
                 if start
                     .checked_add(length)
-                    .is_none_or(|stop| stop > clip.length)
+                    .is_none_or(|stop| stop > self.clips[index].length)
                 {
                     return Err(EditError::NoteOutsideClip);
                 }
-                if clip.notes.iter().any(|other| note.overlaps(other)) {
+                if self.notes(id).any(|other| note.overlaps(other)) {
                     return Err(EditError::NoteOverlap);
                 }
-                let notes = &mut next.clips[index].notes;
                 // No note has the key of the new one, which would overlap it.
-                let (Ok(at) | Err(at)) = notes.binary_search_by_key(&note.key(), Note::key);
-                notes.insert(at, note);
+                let (Ok(at) | Err(at)) = self.note_index(id, note.key());
+                next.notes.insert(at, (id, note));
             }
             Command::RemoveNote { id, start, pitch } => {
-                let index = self.clip_index(id).ok_or(EditError::UnknownClip)?;
-                let notes = &mut next.clips[index].notes;
-                let at = notes
-                    .binary_search_by_key(&(start, pitch), Note::key)
+                self.clip_index(id).ok_or(EditError::UnknownClip)?;
+                let at = self
+                    .note_index(id, (start, pitch))
                     .map_err(|_| EditError::UnknownNote)?;
-                notes.remove(at);
+                next.notes.remove(at);
             }
         }
         Ok((next, next_clip_id))
