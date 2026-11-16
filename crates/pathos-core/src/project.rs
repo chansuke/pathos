@@ -15,6 +15,13 @@ pub const MAX_TICK: Tick = 1 << 40;
 /// Slowest accepted tempo, in microseconds per quarter note (1 BPM).
 pub const MAX_US_PER_QUARTER: u64 = 60_000_000;
 
+/// The highest MIDI pitch.
+pub const MAX_PITCH: u8 = 127;
+
+/// The highest MIDI velocity. Velocity 0 means note-off in MIDI, so a note's
+/// velocity is at least 1.
+pub const MAX_VELOCITY: u8 = 127;
+
 /// From `tick` onwards a quarter note lasts `us_per_quarter` microseconds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(kani, derive(kani::Arbitrary))]
@@ -23,13 +30,40 @@ pub struct TempoChange {
     pub us_per_quarter: u64,
 }
 
+/// A MIDI note, starting `start` ticks after the start of its clip.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(kani, derive(kani::Arbitrary))]
+pub struct Note {
+    pub start: Tick,
+    pub length: u64,
+    pub pitch: u8,
+    pub velocity: u8,
+}
+
+impl Note {
+    /// The tick just past the end of the note, relative to its clip.
+    pub fn stop(&self) -> Tick {
+        self.start + self.length
+    }
+
+    fn overlaps(&self, other: &Note) -> bool {
+        self.pitch == other.pitch && self.start < other.stop() && other.start < self.stop()
+    }
+
+    /// The order of notes in a clip: by start, then pitch.
+    fn key(&self) -> (Tick, u64) {
+        (self.start, u64::from(self.pitch))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Clip {
     pub id: u64,
     pub track: u64,
     pub start: Tick,
     pub length: u64,
+    /// Ordered by start, then pitch.
+    pub notes: Vec<Note>,
 }
 
 impl Clip {
@@ -73,6 +107,20 @@ pub enum Command {
     RemoveTempo {
         tick: Tick,
     },
+    /// Add a note to a clip, `start` ticks after the start of the clip.
+    AddNote {
+        id: u64,
+        start: Tick,
+        length: u64,
+        pitch: u64,
+        velocity: u64,
+    },
+    /// Remove the note of `pitch` that starts `start` ticks into a clip.
+    RemoveNote {
+        id: u64,
+        start: Tick,
+        pitch: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,6 +134,11 @@ pub enum EditError {
     InvalidTempo,
     InitialTempo,
     NoTempoChange,
+    EmptyNote,
+    InvalidNote,
+    NoteOutsideClip,
+    NoteOverlap,
+    UnknownNote,
     NothingToUndo,
     NothingToRedo,
 }
@@ -102,6 +155,11 @@ impl fmt::Display for EditError {
             EditError::InvalidTempo => "tempo out of range",
             EditError::InitialTempo => "the tempo at tick 0 cannot be removed",
             EditError::NoTempoChange => "no tempo change at that tick",
+            EditError::EmptyNote => "a note must not be empty",
+            EditError::InvalidNote => "pitch or velocity out of range",
+            EditError::NoteOutsideClip => "a note must end within its clip",
+            EditError::NoteOverlap => "notes of one pitch must not overlap",
+            EditError::UnknownNote => "no such note",
             EditError::NothingToUndo => "nothing to undo",
             EditError::NothingToRedo => "nothing to redo",
         })
@@ -197,6 +255,7 @@ impl Project {
                     track,
                     start,
                     length,
+                    notes: Vec::new(),
                 };
                 if self.collides(&clip) {
                     return Err(EditError::Overlap);
@@ -209,14 +268,14 @@ impl Project {
                 if track >= self.track_count {
                     return Err(EditError::UnknownTrack);
                 }
-                let clip = self.clips[index];
+                let clip = &self.clips[index];
                 if exceeds_max_tick(start, clip.length) {
                     return Err(EditError::OutOfRange);
                 }
                 let moved = Clip {
                     track,
                     start,
-                    ..clip
+                    ..clip.clone()
                 };
                 if self.collides(&moved) {
                     return Err(EditError::Overlap);
@@ -225,17 +284,40 @@ impl Project {
             }
             Command::SplitClip { id, tick } => {
                 let index = self.clip_index(id).ok_or(EditError::UnknownClip)?;
-                let clip = self.clips[index];
+                let clip = &self.clips[index];
                 if tick <= clip.start || tick >= clip.stop() {
                     return Err(EditError::SplitOutsideClip);
                 }
-                next.clips[index].length = tick - clip.start;
-                next.clips.push(Clip {
+                // A note that starts before the split stays in the left clip
+                // and ends at the split at the latest (ADR 14).
+                let offset = tick - clip.start;
+                let (left, right): (Vec<Note>, Vec<Note>) =
+                    clip.notes.iter().partition(|note| note.start < offset);
+                let right = Clip {
                     id: next_clip_id,
                     track: clip.track,
                     start: tick,
                     length: clip.stop() - tick,
-                });
+                    notes: right
+                        .into_iter()
+                        .map(|note| Note {
+                            start: note.start - offset,
+                            ..note
+                        })
+                        .collect(),
+                };
+                next.clips[index] = Clip {
+                    length: offset,
+                    notes: left
+                        .into_iter()
+                        .map(|note| Note {
+                            length: note.length.min(offset - note.start),
+                            ..note
+                        })
+                        .collect(),
+                    ..clip.clone()
+                };
+                next.clips.push(right);
                 next_clip_id += 1;
             }
             Command::DeleteClip { id } => {
@@ -270,6 +352,53 @@ impl Project {
                     .binary_search_by_key(&tick, |change| change.tick)
                     .map_err(|_| EditError::NoTempoChange)?;
                 next.tempo.remove(index);
+            }
+            Command::AddNote {
+                id,
+                start,
+                length,
+                pitch,
+                velocity,
+            } => {
+                let index = self.clip_index(id).ok_or(EditError::UnknownClip)?;
+                if length == 0 {
+                    return Err(EditError::EmptyNote);
+                }
+                let note = match (u8::try_from(pitch), u8::try_from(velocity)) {
+                    (Ok(pitch), Ok(velocity))
+                        if pitch <= MAX_PITCH && (1..=MAX_VELOCITY).contains(&velocity) =>
+                    {
+                        Note {
+                            start,
+                            length,
+                            pitch,
+                            velocity,
+                        }
+                    }
+                    _ => return Err(EditError::InvalidNote),
+                };
+                let clip = &self.clips[index];
+                if start
+                    .checked_add(length)
+                    .is_none_or(|stop| stop > clip.length)
+                {
+                    return Err(EditError::NoteOutsideClip);
+                }
+                if clip.notes.iter().any(|other| note.overlaps(other)) {
+                    return Err(EditError::NoteOverlap);
+                }
+                let notes = &mut next.clips[index].notes;
+                // No note has the key of the new one, which would overlap it.
+                let (Ok(at) | Err(at)) = notes.binary_search_by_key(&note.key(), Note::key);
+                notes.insert(at, note);
+            }
+            Command::RemoveNote { id, start, pitch } => {
+                let index = self.clip_index(id).ok_or(EditError::UnknownClip)?;
+                let notes = &mut next.clips[index].notes;
+                let at = notes
+                    .binary_search_by_key(&(start, pitch), Note::key)
+                    .map_err(|_| EditError::UnknownNote)?;
+                notes.remove(at);
             }
         }
         Ok((next, next_clip_id))
