@@ -1,0 +1,15 @@
+[package]
+name = "pathos-render"
+description = "The deterministic offline render of pathos (ADR 15)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+pathos-core = { path = "../pathos-core" }
+
+[dev-dependencies]
+proptest = "1"

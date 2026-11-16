@@ -12,7 +12,7 @@ publish = false
 gpui = "0.2.2"
 
 [workspace]
-members = ["crates/pathos-core"]
+members = ["crates/pathos-core", "crates/pathos-render"]
 
 [workspace.package]
 version = "0.1.0"
