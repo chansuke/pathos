@@ -1,7 +1,7 @@
 ---
 number: 19
 title: Save a project as the edits that built it
-status: proposed
+status: accepted
 date: 2026-11-17
 ---
 
