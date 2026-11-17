@@ -29,6 +29,12 @@ pub struct Rect {
     pub height: f32,
 }
 
+impl Rect {
+    fn contains(&self, x: f32, y: f32) -> bool {
+        self.x <= x && x < self.x + self.width && self.y <= y && y < self.y + self.height
+    }
+}
+
 /// What lies under a point.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hit {
@@ -53,11 +59,39 @@ pub enum Hit {
         start: Tick,
         pitch: u8,
     },
+    /// The mute button in the header of a track.
+    Mute {
+        track: u64,
+    },
+    /// The volume in the header of a track.
+    Volume {
+        track: u64,
+    },
     Nothing,
 }
 
 pub fn lane_top(track: u64) -> f32 {
     STATUS_HEIGHT + track as f32 * LANE_HEIGHT
+}
+
+/// The mute button of a track, below its name.
+pub fn mute_rect(track: u64) -> Rect {
+    Rect {
+        x: 6.0,
+        y: lane_top(track) + 26.0,
+        width: 16.0,
+        height: 16.0,
+    }
+}
+
+/// The volume of a track, right of its mute button.
+pub fn volume_rect(track: u64) -> Rect {
+    Rect {
+        x: 26.0,
+        y: lane_top(track) + 26.0,
+        width: HEADER_WIDTH - 28.0,
+        height: 16.0,
+    }
 }
 
 pub fn clip_rect(clip: &Clip) -> Rect {
@@ -118,7 +152,11 @@ pub fn playhead_x(project: &Project, sample_rate: NonZeroU32, frame: u64) -> f32
 /// What lies under `(x, y)`, with the piano roll showing the clip `selected`.
 pub fn hit(project: &Project, selected: Option<u64>, x: f32, y: f32) -> Hit {
     if x < HEADER_WIDTH {
-        return Hit::Nothing;
+        return match track_at(project, y) {
+            Some(track) if mute_rect(track).contains(x, y) => Hit::Mute { track },
+            Some(track) if volume_rect(track).contains(x, y) => Hit::Volume { track },
+            _ => Hit::Nothing,
+        };
     }
     if let Some(track) = track_at(project, y) {
         let tick = width_to_ticks(x - HEADER_WIDTH, BEAT_WIDTH);
@@ -232,6 +270,33 @@ mod tests {
                 clip.id
             );
         }
+    }
+
+    #[test]
+    fn the_header_of_each_track_has_a_mute_button_and_a_volume() {
+        let project = project();
+        for track in 0..project.track_count() {
+            let (x, y) = center(mute_rect(track));
+            assert_eq!(hit(&project, None, x, y), Hit::Mute { track });
+            let (x, y) = center(volume_rect(track));
+            assert_eq!(hit(&project, None, x, y), Hit::Volume { track });
+            // The volume reaches almost to the timeline; its first pixel is
+            // inside and the ones past its ends are not.
+            let rect = volume_rect(track);
+            let volume = Hit::Volume { track };
+            assert_eq!(hit(&project, None, rect.x, rect.y), volume);
+            assert_eq!(hit(&project, None, HEADER_WIDTH - 3.0, y), volume);
+            assert_eq!(hit(&project, None, rect.x + rect.width, y), Hit::Nothing);
+            assert_eq!(hit(&project, None, x, rect.y + rect.height), Hit::Nothing);
+            assert_eq!(hit(&project, None, x, rect.y - 1.0), Hit::Nothing);
+            assert_eq!(
+                hit(&project, None, 2.0, y),
+                Hit::Nothing,
+                "left of the button"
+            );
+        }
+        let below = lane_top(project.track_count()) + 30.0;
+        assert_eq!(hit(&project, None, 30.0, below), Hit::Nothing);
     }
 
     #[test]

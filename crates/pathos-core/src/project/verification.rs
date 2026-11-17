@@ -34,7 +34,13 @@ fn well_formed(p: &Project, next_clip_id: u64) -> bool {
                 .checked_add(clip.length)
                 .is_some_and(|stop| stop <= MAX_TICK)
     });
+    // The tracks that differ from a new one exist, are in range, differ and
+    // are ordered by index.
+    let mixed = p.mixed.iter().all(|(index, track)| {
+        *index < p.track_count && track.volume <= MAX_VOLUME && *track != Track::default()
+    }) && p.mixed.windows(2).all(|pair| pair[0].0 < pair[1].0);
     tempo
+        && mixed
         && in_range
         && p.clips
             .iter()
@@ -75,14 +81,18 @@ fn notes_well_formed(p: &Project) -> bool {
     true
 }
 
-/// Any well-formed project with `TEMPO` tempo changes, `CLIPS` clips and
-/// `NOTES` notes, with the id the next created clip receives.
-fn any_project<const TEMPO: usize, const CLIPS: usize, const NOTES: usize>() -> (Project, u64) {
+/// Any well-formed project with `TEMPO` tempo changes, `CLIPS` clips, `NOTES`
+/// notes and `MIXED` tracks that differ from a new one, with the id the next
+/// created clip receives.
+fn any_project<const TEMPO: usize, const CLIPS: usize, const NOTES: usize, const MIXED: usize>()
+-> (Project, u64) {
     let tempo: [TempoChange; TEMPO] = kani::any();
     let clips: [Clip; CLIPS] = kani::any();
     let notes: [(u64, Note); NOTES] = kani::any();
+    let mixed: [(u64, Track); MIXED] = kani::any();
     let project = Project {
         track_count: kani::any(),
+        mixed: mixed.to_vec(),
         tempo: tempo.to_vec(),
         clips: clips.to_vec(),
         notes: notes.to_vec(),
@@ -95,8 +105,10 @@ fn any_project<const TEMPO: usize, const CLIPS: usize, const NOTES: usize>() -> 
 /// `step_preserves_wellFormed` and `step_nextClipId_le` of the Lean model, for
 /// the Rust code: the command either fails or keeps the project well-formed,
 /// and never lowers the next clip id.
-fn check_apply<const TEMPO: usize, const CLIPS: usize, const NOTES: usize>(command: Command) {
-    let (project, next_clip_id) = any_project::<TEMPO, CLIPS, NOTES>();
+fn check_apply<const TEMPO: usize, const CLIPS: usize, const NOTES: usize, const MIXED: usize>(
+    command: Command,
+) {
+    let (project, next_clip_id) = any_project::<TEMPO, CLIPS, NOTES, MIXED>();
     // Each increment of a counter takes one accepted edit, so a history cannot
     // reach `u64::MAX` of either.
     kani::assume(project.track_count < u64::MAX && next_clip_id < u64::MAX);
@@ -117,7 +129,8 @@ fn check_apply<const TEMPO: usize, const CLIPS: usize, const NOTES: usize>(comma
 }
 
 /// Declares a harness that applies `$command` to a project with `$tempo`
-/// tempo changes, `$clips` clips and `$notes` notes, none when omitted.
+/// tempo changes, `$clips` clips, `$notes` notes and `$mixed` tracks that
+/// differ from a new one, none when omitted.
 /// A command adds at most one element to a list of at most two, so loops run
 /// at most three times.
 macro_rules! apply_harness {
@@ -131,11 +144,28 @@ macro_rules! apply_harness {
         notes = $notes:literal,
         $command:expr
     ) => {
+        apply_harness!(
+            $name,
+            tempo = $tempo,
+            clips = $clips,
+            notes = $notes,
+            mixed = 0,
+            $command
+        );
+    };
+    (
+        $name:ident,
+        tempo = $tempo:literal,
+        clips = $clips:literal,
+        notes = $notes:literal,
+        mixed = $mixed:literal,
+        $command:expr
+    ) => {
         #[kani::proof]
         #[kani::unwind(4)]
         #[kani::solver(minisat)]
         fn $name() {
-            check_apply::<$tempo, $clips, $notes>($command);
+            check_apply::<$tempo, $clips, $notes, $mixed>($command);
         }
     };
 }
@@ -324,6 +354,51 @@ apply_harness!(
     }
 );
 
+apply_harness!(
+    set_track_volume_with_1_mixed,
+    tempo = 1,
+    clips = 0,
+    notes = 0,
+    mixed = 1,
+    Command::SetTrackVolume {
+        track: kani::any(),
+        volume: kani::any(),
+    }
+);
+apply_harness!(
+    set_track_volume_with_2_mixed,
+    tempo = 1,
+    clips = 0,
+    notes = 0,
+    mixed = 2,
+    Command::SetTrackVolume {
+        track: kani::any(),
+        volume: kani::any(),
+    }
+);
+apply_harness!(
+    set_track_mute_with_1_mixed,
+    tempo = 1,
+    clips = 0,
+    notes = 0,
+    mixed = 1,
+    Command::SetTrackMute {
+        track: kani::any(),
+        muted: kani::any(),
+    }
+);
+apply_harness!(
+    set_track_mute_with_2_mixed,
+    tempo = 1,
+    clips = 0,
+    notes = 0,
+    mixed = 2,
+    Command::SetTrackMute {
+        track: kani::any(),
+        muted: kani::any(),
+    }
+);
+
 /// The harnesses of each command. A new command does not compile until it is
 /// given one here.
 #[allow(dead_code)]
@@ -342,6 +417,10 @@ fn harnesses(command: Command) -> &'static [fn()] {
         Command::RemoveTempo { .. } => &[remove_tempo_with_2],
         Command::AddNote { .. } => &[add_note_to_0_notes, add_note_to_1_note, add_note_to_2_notes],
         Command::RemoveNote { .. } => &[remove_note_of_1, remove_note_of_2],
+        Command::SetTrackVolume { .. } => {
+            &[set_track_volume_with_1_mixed, set_track_volume_with_2_mixed]
+        }
+        Command::SetTrackMute { .. } => &[set_track_mute_with_1_mixed, set_track_mute_with_2_mixed],
     }
 }
 
@@ -355,6 +434,7 @@ fn tick_to_micros_does_not_overflow() {
     let tempo: [TempoChange; 2] = kani::any();
     let project = Project {
         track_count: 0,
+        mixed: Vec::new(),
         tempo: tempo.to_vec(),
         clips: Vec::new(),
         notes: Vec::new(),

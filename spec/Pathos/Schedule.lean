@@ -26,18 +26,27 @@ def Event.key : Event → Nat × Nat × Nat × Nat × Nat
 
 def Event.le (a b : Event) : Bool := (compare a.key b.key).isLE
 
+def Event.track : Event → Nat
+  | .off _ track _ => track
+  | .on _ track _ _ => track
+
+/-- Whether `track` is muted. A track the project does not have is not. -/
+def Project.muted (p : Project) (track : Nat) : Bool :=
+  (p.tracks[track]?.map (·.muted)).getD false
+
 /-- The sample of `tick` at `rate` samples per second, rounded down once. -/
 def Project.sampleOf (p : Project) (rate : Nat) (tick : Tick) : Nat :=
   microsTimesPpq p.tempo tick * rate / (ppq * 1000000)
 
 /-- The events of every note at `rate` samples per second, in order. A note
 that starts and stops at the same sample is not heard and has no events, since
-its note-off would come before its note-on. -/
+its note-off would come before its note-on. Nor has a note of a muted track
+(ADR 20). -/
 def Project.schedule (p : Project) (rate : Nat) : List Event :=
   let events := p.clips.flatMap fun clip => clip.notes.flatMap fun note =>
     let on := p.sampleOf rate (clip.start + note.start)
     let off := p.sampleOf rate (clip.start + note.stop)
-    if on == off then []
+    if on == off || p.muted clip.track then []
     else [.on on clip.track note.pitch note.velocity, .off off clip.track note.pitch]
   events.mergeSort Event.le
 
@@ -56,6 +65,18 @@ theorem schedule_ordered (p : Project) (rate : Nat) :
     · right
       rw [Std.OrientedOrd.eq_swap (a := b.key) (b := a.key), h]
       rfl
+
+/-- A muted track is never heard: no event of the schedule belongs to it. -/
+theorem schedule_muted_silent (p : Project) (rate : Nat) (e : Event)
+    (mem : e ∈ p.schedule rate) : p.muted e.track = false := by
+  simp only [Project.schedule, List.mem_mergeSort, List.mem_flatMap] at mem
+  obtain ⟨clip, -, note, -, mem⟩ := mem
+  split at mem
+  · simp at mem
+  · rename_i heard
+    simp only [Bool.or_eq_true, beq_iff_eq, not_or, Bool.not_eq_true] at heard
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at mem
+    rcases mem with rfl | rfl <;> exact heard.2
 
 /-- A later tick never lies at an earlier sample. -/
 theorem sampleOf_monotone (p : Project) (rate : Nat) (a b : Tick) (le : a ≤ b) :

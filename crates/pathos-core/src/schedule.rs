@@ -54,10 +54,14 @@ impl Project {
 
     /// The events of every note at `rate` samples per second, in order. A note
     /// that starts and stops at the same sample is not heard and has no
-    /// events, since its note-off would come before its note-on.
+    /// events, since its note-off would come before its note-on. Nor has a
+    /// note of a muted track (ADR 20).
     pub fn schedule(&self, rate: u64) -> Vec<Event> {
         let mut events = Vec::new();
         for clip in self.clips() {
+            if self.track(clip.track).is_some_and(|track| track.muted) {
+                continue;
+            }
             for note in self.notes(clip.id) {
                 let on = self.sample_of(rate, clip.start + note.start);
                 let off = self.sample_of(rate, clip.start + note.stop());

@@ -2,7 +2,9 @@
 //! change to the project goes through [`Document::edit`] (ADR 2), so the tests
 //! here check which edit a gesture produces (ADR 7).
 
-use pathos_core::{Command, Document, Edit, EditError, History, PPQ, Tick};
+use pathos_core::{
+    Command, Document, Edit, EditError, History, MAX_VOLUME, PPQ, Tick, UNITY_VOLUME,
+};
 
 use crate::layout::{self, BEAT_WIDTH, Hit};
 
@@ -11,6 +13,10 @@ const CLIP_LENGTH: u64 = 4 * PPQ;
 /// A new note lasts a sixteenth and starts on one.
 const NOTE_LENGTH: u64 = PPQ / 4;
 const NOTE_VELOCITY: u64 = 100;
+/// The change of a track's volume per pixel of a vertical drag on it.
+const DECIBELS_PER_PIXEL: f32 = 0.25;
+/// A volume dragged down to this level or below is silent.
+const SILENT_DECIBELS: f32 = -60.0;
 
 /// A gesture, in window coordinates, as the view receives it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -31,11 +37,21 @@ pub enum Key {
     Redo,
 }
 
-/// A clip being dragged from where the button went down.
+/// What the pointer drags from where the button went down.
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Drag {
-    id: u64,
-    x: f32,
+enum Drag {
+    Clip {
+        id: u64,
+        x: f32,
+    },
+    /// A track's volume, applied when the button is released so that the
+    /// whole gesture is one step of undo (ADR 20).
+    Volume {
+        track: u64,
+        y: f32,
+        from: f32,
+        volume: u16,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -78,6 +94,28 @@ impl Editor {
         self.rejected
     }
 
+    /// Whether a volume is being dragged, so that the window shows each move.
+    pub fn dragging_volume(&self) -> bool {
+        matches!(self.drag, Some(Drag::Volume { .. }))
+    }
+
+    /// The volume of `track` as the window shows it: while it is dragged, the
+    /// volume it would get.
+    pub fn volume(&self, track: u64) -> u16 {
+        match self.drag {
+            Some(Drag::Volume {
+                track: dragged,
+                volume,
+                ..
+            }) if dragged == track => volume,
+            _ => self
+                .history()
+                .present()
+                .track(track)
+                .map_or(UNITY_VOLUME, |track| track.volume),
+        }
+    }
+
     /// Handles `input` and returns whether the project changed.
     pub fn handle(&mut self, input: Input) -> bool {
         let Some(edit) = self.edit_for(input) else {
@@ -111,7 +149,30 @@ impl Editor {
                     }
                     Hit::Clip { id, .. } => {
                         self.selected = Some(id);
-                        self.drag = Some(Drag { id, x });
+                        self.drag = Some(Drag::Clip { id, x });
+                        None
+                    }
+                    Hit::Mute { track } => {
+                        let muted = project.track(track).is_some_and(|track| track.muted);
+                        Some(Edit::Apply(Command::SetTrackMute {
+                            track,
+                            muted: !muted,
+                        }))
+                    }
+                    Hit::Volume { track } if clicks == 2 => {
+                        Some(Edit::Apply(Command::SetTrackVolume {
+                            track,
+                            volume: UNITY_VOLUME.into(),
+                        }))
+                    }
+                    Hit::Volume { track } => {
+                        let volume = self.volume(track);
+                        self.drag = Some(Drag::Volume {
+                            track,
+                            y,
+                            from: decibels(volume).unwrap_or(SILENT_DECIBELS),
+                            volume,
+                        });
                         None
                     }
                     Hit::Roll { id, tick, pitch } => Some(Edit::Apply(Command::AddNote {
@@ -131,13 +192,39 @@ impl Editor {
             }
             Input::Move { x, y } => {
                 self.pointer = (x, y);
+                if let Some(Drag::Volume {
+                    y: from_y,
+                    from,
+                    volume,
+                    ..
+                }) = &mut self.drag
+                {
+                    *volume = volume_at(*from + (*from_y - y) * DECIBELS_PER_PIXEL);
+                }
                 None
             }
             Input::Up { x, y } => {
                 self.pointer = (x, y);
-                let drag = self.drag.take()?;
-                let clip = project.clips().iter().find(|clip| clip.id == drag.id)?;
-                let beats = ((x - drag.x) / BEAT_WIDTH).round() as i64;
+                let (id, from_x) = match self.drag.take()? {
+                    Drag::Clip { id, x } => (id, x),
+                    Drag::Volume {
+                        track,
+                        y: from_y,
+                        from,
+                        ..
+                    } => {
+                        let volume = volume_at(from + (from_y - y) * DECIBELS_PER_PIXEL);
+                        let before = project.track(track)?.volume;
+                        return (volume != before).then_some(Edit::Apply(
+                            Command::SetTrackVolume {
+                                track,
+                                volume: volume.into(),
+                            },
+                        ));
+                    }
+                };
+                let clip = project.clips().iter().find(|clip| clip.id == id)?;
+                let beats = ((x - from_x) / BEAT_WIDTH).round() as i64;
                 let start = clip.start.saturating_add_signed(beats * PPQ as i64);
                 let track = layout::track_at(project, y).unwrap_or(clip.track);
                 (start != clip.start || track != clip.track).then_some(Edit::Apply(
@@ -171,6 +258,28 @@ impl Editor {
     }
 }
 
+/// The level of `volume` in decibels, or `None` when it is silent.
+pub fn decibels(volume: u16) -> Option<f32> {
+    (volume > 0).then(|| 20.0 * (f32::from(volume) / f32::from(UNITY_VOLUME)).log10())
+}
+
+/// The volume nearest to `decibels`, silent at [`SILENT_DECIBELS`] and below.
+fn volume_at(decibels: f32) -> u16 {
+    if decibels <= SILENT_DECIBELS {
+        return 0;
+    }
+    let volume = f32::from(UNITY_VOLUME) * 10f32.powf(decibels / 20.0);
+    volume.round().min(f32::from(MAX_VOLUME)) as u16
+}
+
+/// A volume as the header of a track shows it.
+pub fn volume_label(volume: u16) -> String {
+    match decibels(volume) {
+        Some(decibels) => format!("{decibels:.1} dB"),
+        None => "-inf dB".into(),
+    }
+}
+
 fn round_down(tick: Tick, step: u64) -> Tick {
     tick / step * step
 }
@@ -183,7 +292,8 @@ fn round_nearest(tick: Tick, step: u64) -> Tick {
 mod tests {
     use super::*;
     use crate::layout::{
-        HEADER_WIDTH, LANE_HEIGHT, ROLL_BEAT_WIDTH, ROW_HEIGHT, lane_top, row_top,
+        HEADER_WIDTH, LANE_HEIGHT, ROLL_BEAT_WIDTH, ROW_HEIGHT, Rect, lane_top, mute_rect, row_top,
+        volume_rect,
     };
 
     /// The point `beats` into the lane of `track`, halfway down.
@@ -199,6 +309,10 @@ mod tests {
             HEADER_WIDTH + beats * ROLL_BEAT_WIDTH,
             row_top(editor.history().present(), pitch) + ROW_HEIGHT / 2.0,
         )
+    }
+
+    fn center(rect: Rect) -> (f32, f32) {
+        (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0)
     }
 
     fn click(editor: &mut Editor, (x, y): (f32, f32), clicks: usize) {
@@ -248,6 +362,86 @@ mod tests {
         let mut commands = SETUP.to_vec();
         commands.push(command);
         commands
+    }
+
+    #[test]
+    fn a_click_on_mute_mutes_the_track_and_another_unmutes_it() {
+        let mut editor = with_clip();
+        click(&mut editor, center(mute_rect(1)), 1);
+        let mute = |muted| Command::SetTrackMute { track: 1, muted };
+        assert_edits(&editor, &and(mute(true)));
+        click(&mut editor, center(mute_rect(1)), 1);
+        let mut commands = and(mute(true));
+        commands.push(mute(false));
+        assert_edits(&editor, &commands);
+    }
+
+    #[test]
+    fn dragging_a_volume_shows_it_and_applies_one_edit_on_release() {
+        let mut editor = with_clip();
+        let (x, y) = center(volume_rect(0));
+        editor.handle(Input::Down { x, y, clicks: 1 });
+        editor.handle(Input::Move { x, y: y - 12.0 });
+        editor.handle(Input::Move { x, y: y - 24.0 });
+        // Four pixels a decibel: +6 dB is a gain of 1.995.
+        assert!(editor.dragging_volume());
+        assert_eq!(editor.volume(0), 1995);
+        assert_eq!(editor.volume(1), UNITY_VOLUME, "the other track");
+        assert_edits(&editor, &SETUP);
+        editor.handle(Input::Up { x, y: y - 24.0 });
+        assert!(!editor.dragging_volume());
+        assert_edits(
+            &editor,
+            &and(Command::SetTrackVolume {
+                track: 0,
+                volume: 1995,
+            }),
+        );
+        assert_eq!(editor.volume(0), 1995);
+        // Down from there by 12 dB: -6 dB is a gain of 0.501.
+        drag(&mut editor, (x, y), (x, y + 48.0));
+        assert_eq!(editor.volume(0), 501);
+    }
+
+    #[test]
+    fn a_volume_stops_at_the_maximum_and_falls_silent_below_60_db() {
+        let mut editor = with_clip();
+        let (x, y) = center(volume_rect(0));
+        drag(&mut editor, (x, y), (x, y - 1000.0));
+        assert_eq!(editor.volume(0), MAX_VOLUME);
+        drag(&mut editor, (x, y), (x, y + 1000.0));
+        assert_eq!(editor.volume(0), 0);
+        // From silence, a drag starts at -60 dB.
+        drag(&mut editor, (x, y), (x, y - 4.0));
+        assert_eq!(editor.volume(0), 1);
+    }
+
+    #[test]
+    fn a_volume_dragged_back_to_where_it_was_applies_nothing() {
+        let mut editor = with_clip();
+        let (x, y) = center(volume_rect(0));
+        editor.handle(Input::Down { x, y, clicks: 1 });
+        editor.handle(Input::Move { x, y: y - 20.0 });
+        assert!(!editor.handle(Input::Up { x, y }));
+        assert_edits(&editor, &SETUP);
+    }
+
+    #[test]
+    fn a_double_click_on_a_volume_resets_it() {
+        let mut editor = with_clip();
+        let (x, y) = center(volume_rect(0));
+        drag(&mut editor, (x, y), (x, y + 8.0));
+        click(&mut editor, (x, y), 2);
+        assert_eq!(editor.volume(0), UNITY_VOLUME);
+        assert_eq!(editor.history().undo_depth(), SETUP.len() + 2);
+    }
+
+    #[test]
+    fn a_volume_shows_in_decibels() {
+        assert_eq!(volume_label(UNITY_VOLUME), "0.0 dB");
+        assert_eq!(volume_label(500), "-6.0 dB");
+        assert_eq!(volume_label(MAX_VOLUME), "6.0 dB");
+        assert_eq!(volume_label(0), "-inf dB");
     }
 
     #[test]

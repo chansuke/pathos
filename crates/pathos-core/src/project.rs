@@ -23,6 +23,31 @@ pub const MAX_PITCH: u8 = 127;
 /// velocity is at least 1.
 pub const MAX_VELOCITY: u8 = 127;
 
+/// The loudest track volume, a gain of 2 (ADR 20).
+pub const MAX_VOLUME: u16 = 2000;
+
+/// The volume of a new track, a gain of 1.
+pub const UNITY_VOLUME: u16 = 1000;
+
+/// A track's volume is its gain in thousandths (ADR 20). A muted track is not
+/// heard.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(kani, derive(kani::Arbitrary))]
+pub struct Track {
+    pub volume: u16,
+    pub muted: bool,
+}
+
+impl Default for Track {
+    /// A new track.
+    fn default() -> Self {
+        Track {
+            volume: UNITY_VOLUME,
+            muted: false,
+        }
+    }
+}
+
 /// From `tick` onwards a quarter note lasts `us_per_quarter` microseconds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(kani, derive(kani::Arbitrary))]
@@ -121,6 +146,14 @@ pub enum Command {
         start: Tick,
         pitch: u64,
     },
+    SetTrackVolume {
+        track: u64,
+        volume: u64,
+    },
+    SetTrackMute {
+        track: u64,
+        muted: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -139,6 +172,7 @@ pub enum EditError {
     NoteOutsideClip,
     NoteOverlap,
     UnknownNote,
+    InvalidVolume,
     NothingToUndo,
     NothingToRedo,
 }
@@ -160,6 +194,7 @@ impl fmt::Display for EditError {
             EditError::NoteOutsideClip => "a note must end within its clip",
             EditError::NoteOverlap => "notes of one pitch must not overlap",
             EditError::UnknownNote => "no such note",
+            EditError::InvalidVolume => "volume out of range",
             EditError::NothingToUndo => "nothing to undo",
             EditError::NothingToRedo => "nothing to redo",
         })
@@ -175,6 +210,10 @@ impl std::error::Error for EditError {}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Project {
     track_count: u64,
+    /// The tracks whose volume or mute differs from a new track's, with their
+    /// index, ordered by index. The model keeps every track in a list; keeping
+    /// the count a plain number lets the Kani harnesses try any count.
+    mixed: Vec<(u64, Track)>,
     /// Ordered by tick, starting at tick 0.
     tempo: Vec<TempoChange>,
     /// Ordered by id.
@@ -190,6 +229,7 @@ impl Default for Project {
     fn default() -> Self {
         Project {
             track_count: 0,
+            mixed: Vec::new(),
             tempo: vec![TempoChange {
                 tick: 0,
                 us_per_quarter: 500_000,
@@ -208,6 +248,31 @@ fn exceeds_max_tick(start: Tick, length: u64) -> bool {
 impl Project {
     pub fn track_count(&self) -> u64 {
         self.track_count
+    }
+
+    /// The volume and mute of `track`, if the project has it.
+    pub fn track(&self, track: u64) -> Option<Track> {
+        (track < self.track_count).then(|| match self.mixed_index(track) {
+            Ok(at) => self.mixed[at].1,
+            Err(_) => Track::default(),
+        })
+    }
+
+    fn mixed_index(&self, track: u64) -> Result<usize, usize> {
+        self.mixed.binary_search_by_key(&track, |(index, _)| *index)
+    }
+
+    /// Gives `track` the volume and mute of `settings`, keeping only tracks
+    /// that differ from a new one in `mixed`.
+    fn set_track(&mut self, track: u64, settings: Track) {
+        match (self.mixed_index(track), settings == Track::default()) {
+            (Ok(at), true) => {
+                self.mixed.remove(at);
+            }
+            (Ok(at), false) => self.mixed[at].1 = settings,
+            (Err(_), true) => {}
+            (Err(at), false) => self.mixed.insert(at, (track, settings)),
+        }
     }
 
     pub fn tempo(&self) -> &[TempoChange] {
@@ -432,6 +497,18 @@ impl Project {
                     .note_index(id, (start, pitch))
                     .map_err(|_| EditError::UnknownNote)?;
                 next.notes.remove(at);
+            }
+            Command::SetTrackVolume { track, volume } => {
+                let settings = self.track(track).ok_or(EditError::UnknownTrack)?;
+                let volume = u16::try_from(volume)
+                    .ok()
+                    .filter(|volume| *volume <= MAX_VOLUME)
+                    .ok_or(EditError::InvalidVolume)?;
+                next.set_track(track, Track { volume, ..settings });
+            }
+            Command::SetTrackMute { track, muted } => {
+                let settings = self.track(track).ok_or(EditError::UnknownTrack)?;
+                next.set_track(track, Track { muted, ..settings });
             }
         }
         Ok((next, next_clip_id))

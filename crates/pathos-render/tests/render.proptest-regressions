@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc e89e6c37ba0e92acf22ec617c779859702f36d966c4a69962b43127133d61b5c # shrinks to a = NoteSpec { track: 0, start: 0, length: 1, pitch: 0, velocity: 1 }, b = NoteSpec { track: 0, start: 0, length: 1, pitch: 0, velocity: 1 }, rate = 44100
