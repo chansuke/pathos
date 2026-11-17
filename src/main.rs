@@ -30,6 +30,7 @@ const NOTE: u32 = 0xe8c547;
 const TEXT: u32 = 0xd0d0d0;
 const ERROR: u32 = 0xe06c75;
 const PLAYHEAD: u32 = 0xf0f0f0;
+const MUTED: u32 = 0xd19a66;
 
 const HINT: &str = "T: track · Double-click a lane: clip · Drag: move · S: split · Delete: delete · \
                     Click the roll: note · Ctrl-Z / Ctrl-Shift-Z: undo / redo · Space: play · \
@@ -306,9 +307,12 @@ impl Render for Pathos {
                     );
                 }),
             )
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, _| {
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
                 let (x, y) = (f32::from(event.position.x), f32::from(event.position.y));
                 this.editor.handle(Input::Move { x, y });
+                if this.editor.dragging_volume() {
+                    cx.notify();
+                }
             }))
             .on_mouse_up(
                 MouseButton::Left,
@@ -328,7 +332,7 @@ impl Render for Pathos {
                 .items_center()
                 .child(status),
             )
-            .children(lanes(project, width))
+            .children(lanes(&self.editor, width))
             .children(project.clips().iter().map(|clip| {
                 let color = if Some(clip.id) == selected {
                     SELECTED_CLIP
@@ -346,22 +350,41 @@ impl Render for Pathos {
     }
 }
 
-/// The track names, the lanes and a line on every bar.
-fn lanes(project: &Project, width: f32) -> Vec<Div> {
+/// The track headers, the lanes and a line on every bar.
+fn lanes(editor: &Editor, width: f32) -> Vec<Div> {
+    let project = editor.history().present();
     let mut elements = Vec::new();
     for track in 0..project.track_count() {
         let top = layout::lane_top(track);
+        let muted = project.track(track).is_some_and(|track| track.muted);
         elements.push(
             at(Rect {
                 x: 0.0,
-                y: top,
+                y: top + 4.0,
                 width: HEADER_WIDTH,
-                height: LANE_HEIGHT,
+                height: 18.0,
             })
             .px_2()
+            .child(format!("Track {}", track + 1)),
+        );
+        let mute = at(layout::mute_rect(track))
             .flex()
             .items_center()
-            .child(format!("Track {}", track + 1)),
+            .justify_center()
+            .border_1()
+            .border_color(rgb(GRID))
+            .child("M");
+        elements.push(if muted {
+            mute.bg(rgb(MUTED)).text_color(rgb(BACKGROUND))
+        } else {
+            mute
+        });
+        elements.push(
+            at(layout::volume_rect(track))
+                .flex()
+                .items_center()
+                .justify_end()
+                .child(editor::volume_label(editor.volume(track))),
         );
         elements.push(
             at(Rect {
