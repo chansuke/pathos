@@ -58,8 +58,12 @@ struct Pathos {
 
 impl Pathos {
     fn handle(&mut self, input: Input, cx: &mut Context<Self>) {
+        let heard = self.editor.dragged_volume();
         if self.editor.handle(input) {
             self.notice = None;
+            self.publish();
+        } else if self.editor.dragged_volume() != heard {
+            // A dragged volume changed or was let go without an edit.
             self.publish();
         }
         cx.notify();
@@ -214,13 +218,10 @@ impl Pathos {
         true
     }
 
-    /// Hands the project as it is now to the audio thread (ADR 18).
+    /// Hands the project as it should sound now to the audio thread (ADR 18).
     fn publish(&self) {
         if let Ok(output) = &self.output {
-            output.publish(Score::new(
-                self.editor.history().present(),
-                output.sample_rate(),
-            ));
+            output.publish(Score::new(&self.editor.heard(), output.sample_rate()));
         }
     }
 
@@ -309,9 +310,10 @@ impl Render for Pathos {
             )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
                 let (x, y) = (f32::from(event.position.x), f32::from(event.position.y));
-                this.editor.handle(Input::Move { x, y });
-                if this.editor.dragging_volume() {
-                    cx.notify();
+                if this.editor.dragged_volume().is_some() {
+                    this.handle(Input::Move { x, y }, cx);
+                } else {
+                    this.editor.handle(Input::Move { x, y });
                 }
             }))
             .on_mouse_up(
