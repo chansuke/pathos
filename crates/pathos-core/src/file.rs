@@ -138,6 +138,12 @@ impl Document {
         &self.history
     }
 
+    /// The accepted edits, oldest first. They only ever grow, so their number
+    /// tells whether a document changed since it was saved.
+    pub fn edits(&self) -> &[Edit] {
+        &self.edits
+    }
+
     /// Applies `edit` to the history and records it if it is accepted.
     pub fn edit(&mut self, edit: Edit) -> Result<(), EditError> {
         self.history.edit(edit)?;
@@ -205,7 +211,10 @@ mod tests {
     fn a_rejected_edit_is_not_recorded() {
         let mut document = Document::default();
         assert_eq!(document.edit(Edit::Undo), Err(EditError::NothingToUndo));
-        assert_eq!(document.save(), "");
+        document.edit(Edit::Apply(Command::AddTrack)).unwrap();
+        assert_eq!(document.edit(Edit::Redo), Err(EditError::NothingToRedo));
+        assert_eq!(document.edits(), [Edit::Apply(Command::AddTrack)]);
+        assert_eq!(document.save(), "add-track\n");
     }
 
     #[test]

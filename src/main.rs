@@ -1,16 +1,20 @@
 mod editor;
+mod file;
 mod layout;
+
+use std::path::PathBuf;
 
 use gpui::{
     App, Application, Bounds, Context, Div, FocusHandle, KeyDownEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, TitlebarOptions, Window, WindowBounds, WindowOptions, div,
-    prelude::*, px, rgb, size,
+    MouseMoveEvent, MouseUpEvent, PathPromptOptions, TitlebarOptions, Window, WindowBounds,
+    WindowOptions, div, prelude::*, px, rgb, size,
 };
-use pathos_core::{PPQ, Project};
+use pathos_core::{Document, PPQ, Project};
 use pathos_playback::output::Output;
 use pathos_render::Score;
 
 use editor::{Editor, Input, Key};
+use file::Saved;
 use layout::{
     BEAT_WIDTH, HEADER_WIDTH, HIGHEST_PITCH, LANE_HEIGHT, LOWEST_PITCH, ROLL_BEAT_WIDTH,
     ROW_HEIGHT, Rect, STATUS_HEIGHT,
@@ -29,7 +33,14 @@ const PLAYHEAD: u32 = 0xf0f0f0;
 
 const HINT: &str = "Double-click a lane: add a clip · Drag a clip: move · S: split at the pointer · \
                     Delete: delete · T: add a track · Click the piano roll: add or remove a note · \
-                    Ctrl-Z / Ctrl-Shift-Z: undo / redo · Space: play / stop · Home: to the start";
+                    Ctrl-Z / Ctrl-Shift-Z: undo / redo · Space: play / stop · Home: to the start · \
+                    Ctrl-S / Ctrl-Shift-S: save / save as · Ctrl-O: open";
+
+/// The outcome of the last save or open, shown until the next accepted edit.
+enum Notice {
+    Saved(PathBuf),
+    Failed(String),
+}
 
 struct Pathos {
     editor: Editor,
@@ -37,14 +48,128 @@ struct Pathos {
     /// The audio device, or why it could not be opened. Editing works
     /// without one.
     output: Result<Output, String>,
+    saved: Saved,
+    notice: Option<Notice>,
+    /// The window title last set, so that it is set only when it changes.
+    title: String,
 }
 
 impl Pathos {
     fn handle(&mut self, input: Input, cx: &mut Context<Self>) {
         if self.editor.handle(input) {
+            self.notice = None;
             self.publish();
         }
         cx.notify();
+    }
+
+    /// Starts editing `document`, stored in `path`, from the beginning.
+    fn replace(&mut self, document: Document, path: PathBuf) {
+        self.saved = Saved::new(Some(path), &document);
+        self.editor = Editor::new(document);
+        if let Ok(output) = &self.output {
+            output.transport().stop();
+            output.transport().seek(0);
+        }
+        self.publish();
+    }
+
+    /// Saves to the document's file, or asks for one when it has none or when
+    /// `choose` is set.
+    fn save(&mut self, choose: bool, cx: &mut Context<Self>) {
+        if let (Some(path), false) = (self.saved.path(), choose) {
+            self.save_to(path.to_path_buf());
+            return;
+        }
+        let name = format!("untitled.{}", file::EXTENSION);
+        let prompt = cx.prompt_for_new_path(&self.saved.directory(), Some(&name));
+        cx.spawn(async move |this, cx| {
+            let answer = prompt.await;
+            this.update(cx, |this, cx| {
+                match answer {
+                    Ok(Ok(Some(path))) => this.save_to(path),
+                    Ok(Err(error)) => {
+                        this.notice =
+                            Some(Notice::Failed(format!("cannot ask for a file: {error}")))
+                    }
+                    Ok(Ok(None)) | Err(_) => {}
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn save_to(&mut self, path: PathBuf) {
+        self.notice = Some(
+            match self.saved.save(path.clone(), self.editor.document()) {
+                Ok(()) => Notice::Saved(path),
+                Err(error) => Notice::Failed(format!("cannot save {}: {error}", path.display())),
+            },
+        );
+    }
+
+    /// Asks for a file and opens it, unless there are unsaved changes.
+    fn open(&mut self, cx: &mut Context<Self>) {
+        if self.saved.modified(self.editor.document()) {
+            self.notice = Some(Notice::Failed(
+                "there are unsaved changes; save them first".into(),
+            ));
+            return;
+        }
+        let prompt = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: None,
+        });
+        cx.spawn(async move |this, cx| {
+            let answer = prompt.await;
+            this.update(cx, |this, cx| {
+                match answer {
+                    Ok(Ok(Some(paths))) => {
+                        if let Some(path) = paths.into_iter().next() {
+                            this.open_path(path);
+                        }
+                    }
+                    Ok(Err(error)) => {
+                        this.notice =
+                            Some(Notice::Failed(format!("cannot ask for a file: {error}")))
+                    }
+                    Ok(Ok(None)) | Err(_) => {}
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn open_path(&mut self, path: PathBuf) {
+        match file::open(&path) {
+            Ok(document) => self.replace(document, path),
+            Err(error) => {
+                self.notice = Some(Notice::Failed(format!(
+                    "cannot open {}: {error}",
+                    path.display()
+                )))
+            }
+        }
+    }
+
+    fn handle_file(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        let modifiers = &event.keystroke.modifiers;
+        if !modifiers.secondary() {
+            return false;
+        }
+        match event.keystroke.key.as_str() {
+            "s" => self.save(modifiers.shift, cx),
+            "o" => self.open(cx),
+            _ => return false,
+        }
+        cx.notify();
+        true
     }
 
     /// Hands the project as it is now to the audio thread (ADR 18).
@@ -75,15 +200,26 @@ impl Pathos {
 
 impl Render for Pathos {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let title = self.saved.title(self.editor.document());
+        if title != self.title {
+            window.set_window_title(&title);
+            self.title = title;
+        }
         let project = self.editor.history().present();
         let selected = self.editor.selected();
         let width = f32::from(window.viewport_size().width);
-        let status = match (self.editor.rejected(), &self.output) {
-            (Some(error), _) => div().text_color(rgb(ERROR)).child(error.to_string()),
-            (None, Err(error)) => div()
+        let status = match (self.editor.rejected(), &self.notice, &self.output) {
+            (Some(error), _, _) => div().text_color(rgb(ERROR)).child(error.to_string()),
+            (None, Some(Notice::Saved(path)), _) => {
+                div().child(format!("Saved {}", path.display()))
+            }
+            (None, Some(Notice::Failed(error)), _) => {
+                div().text_color(rgb(ERROR)).child(error.clone())
+            }
+            (None, None, Err(error)) => div()
                 .text_color(rgb(ERROR))
                 .child(format!("No audio output: {error}")),
-            (None, Ok(_)) => div().child(HINT),
+            (None, None, Ok(_)) => div().child(HINT),
         };
         let playhead = self.output.as_ref().ok().map(|output| {
             output.collect();
@@ -108,7 +244,7 @@ impl Render for Pathos {
             .text_xs()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                if this.handle_transport(event, cx) {
+                if this.handle_file(event, cx) || this.handle_transport(event, cx) {
                     return;
                 }
                 if let Some(key) = key(event) {
@@ -335,11 +471,24 @@ fn main() {
                     if let Err(error) = &output {
                         eprintln!("no audio output: {error}");
                     }
-                    Pathos {
+                    let mut pathos = Pathos {
                         editor: Editor::default(),
                         focus,
                         output,
+                        saved: Saved::default(),
+                        notice: None,
+                        title: String::new(),
+                    };
+                    // A file named on the command line is opened, or created
+                    // by the first save if it does not exist yet.
+                    if let Some(path) = std::env::args_os().nth(1).map(PathBuf::from) {
+                        if path.exists() {
+                            pathos.open_path(path);
+                        } else {
+                            pathos.saved = Saved::new(Some(path), pathos.editor.document());
+                        }
                     }
+                    pathos
                 })
             },
         )

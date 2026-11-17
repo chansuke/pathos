@@ -1,8 +1,8 @@
 //! The editing state of the window and the edit each gesture makes. Every
-//! change to the project goes through [`History::edit`] (ADR 2), so the tests
+//! change to the project goes through [`Document::edit`] (ADR 2), so the tests
 //! here check which edit a gesture produces (ADR 7).
 
-use pathos_core::{Command, Edit, EditError, History, PPQ, Tick};
+use pathos_core::{Command, Document, Edit, EditError, History, PPQ, Tick};
 
 use crate::layout::{self, BEAT_WIDTH, Hit};
 
@@ -40,7 +40,7 @@ struct Drag {
 
 #[derive(Debug, Default)]
 pub struct Editor {
-    history: History,
+    document: Document,
     selected: Option<u64>,
     drag: Option<Drag>,
     pointer: (f32, f32),
@@ -49,13 +49,24 @@ pub struct Editor {
 }
 
 impl Editor {
+    pub fn new(document: Document) -> Self {
+        Editor {
+            document,
+            ..Editor::default()
+        }
+    }
+
+    pub fn document(&self) -> &Document {
+        &self.document
+    }
+
     pub fn history(&self) -> &History {
-        &self.history
+        self.document.history()
     }
 
     pub fn selected(&self) -> Option<u64> {
         self.selected.filter(|id| {
-            self.history
+            self.history()
                 .present()
                 .clips()
                 .iter()
@@ -73,16 +84,16 @@ impl Editor {
             return false;
         };
         if let Edit::Apply(Command::AddClip { .. }) = edit {
-            self.selected = Some(self.history.next_clip_id());
+            self.selected = Some(self.history().next_clip_id());
         }
-        self.rejected = self.history.edit(edit).err();
+        self.rejected = self.document.edit(edit).err();
         self.rejected.is_none()
     }
 
     /// The edit `input` makes, if any, after updating the selection, the drag
     /// and the pointer.
     fn edit_for(&mut self, input: Input) -> Option<Edit> {
-        let project = self.history.present();
+        let project = self.document.history().present();
         match input {
             Input::Down { x, y, clicks } => {
                 self.pointer = (x, y);
@@ -379,6 +390,11 @@ mod tests {
         assert!(!editor.handle(Input::Down { x, y, clicks: 2 }), "rejected");
         assert!(editor.handle(Input::Key(Key::AddTrack)));
         assert!(editor.handle(Input::Key(Key::Undo)));
+        let edits = editor.document().edits();
+        assert_eq!(
+            edits[edits.len() - 2..],
+            [Edit::Apply(Command::AddTrack), Edit::Undo]
+        );
     }
 
     #[test]

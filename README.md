@@ -15,6 +15,11 @@ piano roll for the selected clip:
 
 - `Space` plays and stops, and `Home` returns to the start. Playback is the
   offline render of ADR 15, sample for sample.
+- `Ctrl-S` saves and `Ctrl-Shift-S` saves under a new name; `Ctrl-O` opens a
+  file. `cargo run -- song.pathos` opens `song.pathos`, or creates it on the
+  first save. A project file lists the edits that built the project, one per
+  line, so undo still works after reopening it (ADR 19). On Linux the file
+  prompts need an XDG desktop portal.
 
 To listen without the window, play a short phrase on the default output device:
 
