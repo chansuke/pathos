@@ -252,13 +252,15 @@ apply_harness!(
     clips = 1,
     Command::DeleteClip { id: kani::any() }
 );
-apply_harness!(
-    delete_clip_with_1_note,
-    tempo = 1,
-    clips = 1,
-    notes = 1,
-    Command::DeleteClip { id: kani::any() }
-);
+// With MiniSat this harness took 292 s and 342 s in CI, and ran past its 10
+// minutes twice once tracks had a solo and a pan, which deleting a clip does
+// not read; locally it took 247 s either way. CaDiCaL took 87 s and 3.6 GB.
+#[kani::proof]
+#[kani::unwind(4)]
+#[kani::solver(cadical)]
+fn delete_clip_with_1_note() {
+    check_apply::<1, 1, 1, 0>(Command::DeleteClip { id: kani::any() });
+}
 apply_harness!(
     delete_clip_of_2,
     tempo = 1,
