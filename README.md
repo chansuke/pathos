@@ -19,7 +19,8 @@ piano roll for the selected clip:
   file. `cargo run -- song.pathos` opens `song.pathos`, or creates it on the
   first save. A project file lists the edits that built the project, one per
   line, so undo still works after reopening it (ADR 19). On Linux the file
-  prompts need an XDG desktop portal.
+  prompts need an XDG desktop portal. Closing the window with unsaved changes
+  asks whether to save them first.
 
 To listen without the window, play a short phrase on the default output device:
 

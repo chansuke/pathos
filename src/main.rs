@@ -6,8 +6,8 @@ use std::path::PathBuf;
 
 use gpui::{
     App, Application, Bounds, Context, Div, FocusHandle, KeyDownEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, PathPromptOptions, TitlebarOptions, Window, WindowBounds,
-    WindowOptions, div, prelude::*, px, rgb, size,
+    MouseMoveEvent, MouseUpEvent, PathPromptOptions, PromptLevel, Task, TitlebarOptions, Window,
+    WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
 };
 use pathos_core::{Document, PPQ, Project};
 use pathos_playback::output::Output;
@@ -52,6 +52,8 @@ struct Pathos {
     notice: Option<Notice>,
     /// The window title last set, so that it is set only when it changes.
     title: String,
+    /// Whether the window is asking to save before it closes.
+    asking_to_close: bool,
 }
 
 impl Pathos {
@@ -75,39 +77,79 @@ impl Pathos {
     }
 
     /// Saves to the document's file, or asks for one when it has none or when
-    /// `choose` is set.
-    fn save(&mut self, choose: bool, cx: &mut Context<Self>) {
+    /// `choose` is set. The task tells whether the document was saved.
+    fn save(&mut self, choose: bool, cx: &mut Context<Self>) -> Task<bool> {
         if let (Some(path), false) = (self.saved.path(), choose) {
-            self.save_to(path.to_path_buf());
-            return;
+            return Task::ready(self.save_to(path.to_path_buf()));
         }
         let name = format!("untitled.{}", file::EXTENSION);
         let prompt = cx.prompt_for_new_path(&self.saved.directory(), Some(&name));
         cx.spawn(async move |this, cx| {
             let answer = prompt.await;
             this.update(cx, |this, cx| {
-                match answer {
+                let saved = match answer {
                     Ok(Ok(Some(path))) => this.save_to(path),
                     Ok(Err(error)) => {
                         this.notice =
-                            Some(Notice::Failed(format!("cannot ask for a file: {error}")))
+                            Some(Notice::Failed(format!("cannot ask for a file: {error}")));
+                        false
                     }
-                    Ok(Ok(None)) | Err(_) => {}
-                }
+                    Ok(Ok(None)) | Err(_) => false,
+                };
                 cx.notify();
+                saved
             })
-            .ok();
+            .unwrap_or(false)
         })
-        .detach();
     }
 
-    fn save_to(&mut self, path: PathBuf) {
-        self.notice = Some(
-            match self.saved.save(path.clone(), self.editor.document()) {
-                Ok(()) => Notice::Saved(path),
-                Err(error) => Notice::Failed(format!("cannot save {}: {error}", path.display())),
-            },
+    fn save_to(&mut self, path: PathBuf) -> bool {
+        let saved = self.saved.save(path.clone(), self.editor.document());
+        self.notice = Some(match &saved {
+            Ok(()) => Notice::Saved(path),
+            Err(error) => Notice::Failed(format!("cannot save {}: {error}", path.display())),
+        });
+        saved.is_ok()
+    }
+
+    /// Whether the window may close now. With unsaved changes it asks first,
+    /// and closes the window itself once they are saved or discarded.
+    fn may_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !self.saved.modified(self.editor.document()) {
+            return true;
+        }
+        if self.asking_to_close {
+            return false;
+        }
+        self.asking_to_close = true;
+        let name = self
+            .saved
+            .path()
+            .and_then(|path| path.file_name())
+            .map_or("untitled".into(), |name| name.to_string_lossy());
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &format!("Save the changes to {name}?"),
+            Some("Unsaved changes will be lost."),
+            &["Save", "Close Without Saving", "Cancel"],
+            cx,
         );
+        cx.spawn_in(window, async move |this, cx| {
+            let close = match answer.await {
+                Ok(0) => match this.update(cx, |this, cx| this.save(false, cx)) {
+                    Ok(saving) => saving.await,
+                    Err(_) => false,
+                },
+                Ok(1) => true,
+                _ => false,
+            };
+            let _ = this.update(cx, |this, _| this.asking_to_close = false);
+            if close {
+                let _ = cx.update(|window, _| window.remove_window());
+            }
+        })
+        .detach();
+        false
     }
 
     /// Asks for a file and opens it, unless there are unsaved changes.
@@ -164,7 +206,7 @@ impl Pathos {
             return false;
         }
         match event.keystroke.key.as_str() {
-            "s" => self.save(modifiers.shift, cx),
+            "s" => self.save(modifiers.shift, cx).detach(),
             "o" => self.open(cx),
             _ => return false,
         }
@@ -467,6 +509,11 @@ fn main() {
                 cx.new(|cx| {
                     let focus = cx.focus_handle();
                     focus.focus(window);
+                    let this = cx.entity().downgrade();
+                    window.on_window_should_close(cx, move |window, cx| {
+                        this.update(cx, |this: &mut Pathos, cx| this.may_close(window, cx))
+                            .unwrap_or(true)
+                    });
                     let output = Output::open().map_err(|error| error.to_string());
                     if let Err(error) = &output {
                         eprintln!("no audio output: {error}");
@@ -478,6 +525,7 @@ fn main() {
                         saved: Saved::default(),
                         notice: None,
                         title: String::new(),
+                        asking_to_close: false,
                     };
                     // A file named on the command line is opened, or created
                     // by the first save if it does not exist yet.
