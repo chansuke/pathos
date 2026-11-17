@@ -52,7 +52,9 @@ hash does not change.
 
 The window shows each track's volume in decibels, which is how other DAWs show
 it. A drag on the volume applies one command when the button is released, so
-that one gesture is one step of undo.
+that one gesture is one step of undo. While the drag moves, the window hands
+the audio thread the project with the dragged volume applied, without an edit,
+so the change is heard as it is made.
 
 ### Consequences
 
@@ -62,8 +64,8 @@ that one gesture is one step of undo.
   only by Rust tests.
 * Bad, because a gain in thousandths is coarse at low levels: below about
   -40 dB the steps are larger than 1 dB.
-* Bad, because the volume is heard only after the drag ends, not while it
-  moves.
+* Bad, because each move of a drag builds a new snapshot for the audio thread
+  (ADR 18), which costs as much as an edit.
 * Neutral, because pan, solo and a master volume are left to later decisions.
 
 ### Confirmation

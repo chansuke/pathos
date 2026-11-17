@@ -2,8 +2,10 @@
 //! change to the project goes through [`Document::edit`] (ADR 2), so the tests
 //! here check which edit a gesture produces (ADR 7).
 
+use std::borrow::Cow;
+
 use pathos_core::{
-    Command, Document, Edit, EditError, History, MAX_VOLUME, PPQ, Tick, UNITY_VOLUME,
+    Command, Document, Edit, EditError, History, MAX_VOLUME, PPQ, Project, Tick, UNITY_VOLUME,
 };
 
 use crate::layout::{self, BEAT_WIDTH, Hit};
@@ -94,9 +96,29 @@ impl Editor {
         self.rejected
     }
 
-    /// Whether a volume is being dragged, so that the window shows each move.
-    pub fn dragging_volume(&self) -> bool {
-        matches!(self.drag, Some(Drag::Volume { .. }))
+    /// The track whose volume is being dragged and the volume it would get.
+    pub fn dragged_volume(&self) -> Option<(u64, u16)> {
+        match self.drag {
+            Some(Drag::Volume { track, volume, .. }) => Some((track, volume)),
+            _ => None,
+        }
+    }
+
+    /// The project as it should sound: while a volume is dragged, with that
+    /// volume, so that the drag is heard before it becomes an edit (ADR 20).
+    pub fn heard(&self) -> Cow<'_, Project> {
+        let present = self.history().present();
+        let Some((track, volume)) = self.dragged_volume() else {
+            return Cow::Borrowed(present);
+        };
+        let command = Command::SetTrackVolume {
+            track,
+            volume: volume.into(),
+        };
+        match present.apply(self.history().next_clip_id(), command) {
+            Ok((project, _)) => Cow::Owned(project),
+            Err(_) => Cow::Borrowed(present),
+        }
     }
 
     /// The volume of `track` as the window shows it: while it is dragged, the
@@ -383,13 +405,19 @@ mod tests {
         editor.handle(Input::Down { x, y, clicks: 1 });
         editor.handle(Input::Move { x, y: y - 12.0 });
         editor.handle(Input::Move { x, y: y - 24.0 });
-        // Four pixels a decibel: +6 dB is a gain of 1.995.
-        assert!(editor.dragging_volume());
+        // Four pixels a decibel: +6 dB is a gain of 1.995, which is heard
+        // before it is an edit.
+        assert_eq!(editor.dragged_volume(), Some((0, 1995)));
         assert_eq!(editor.volume(0), 1995);
+        let heard = editor.heard();
+        assert_eq!(heard.track(0).unwrap().volume, 1995);
+        assert_eq!(heard.track(1).unwrap().volume, UNITY_VOLUME);
+        assert_eq!(heard.clips(), editor.history().present().clips());
         assert_eq!(editor.volume(1), UNITY_VOLUME, "the other track");
         assert_edits(&editor, &SETUP);
         editor.handle(Input::Up { x, y: y - 24.0 });
-        assert!(!editor.dragging_volume());
+        assert_eq!(editor.dragged_volume(), None);
+        assert!(matches!(editor.heard(), Cow::Borrowed(_)));
         assert_edits(
             &editor,
             &and(Command::SetTrackVolume {
@@ -422,8 +450,10 @@ mod tests {
         let (x, y) = center(volume_rect(0));
         editor.handle(Input::Down { x, y, clicks: 1 });
         editor.handle(Input::Move { x, y: y - 20.0 });
+        assert_ne!(editor.heard().track(0).unwrap().volume, UNITY_VOLUME);
         assert!(!editor.handle(Input::Up { x, y }));
         assert_edits(&editor, &SETUP);
+        assert_eq!(&*editor.heard(), editor.history().present());
     }
 
     #[test]
