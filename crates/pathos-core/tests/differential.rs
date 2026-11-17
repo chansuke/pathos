@@ -10,7 +10,8 @@ use std::path::PathBuf;
 use std::process::{Command as Process, Stdio};
 
 use pathos_core::{
-    Command, Edit, EditError, Event, History, MAX_PITCH, MAX_TICK, MAX_US_PER_QUARTER, MAX_VELOCITY,
+    Command, Document, Edit, EditError, Event, History, MAX_PITCH, MAX_TICK, MAX_US_PER_QUARTER,
+    MAX_VELOCITY,
 };
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
@@ -29,34 +30,7 @@ impl Request {
         match *self {
             Request::Micros(tick) => format!("micros {tick}"),
             Request::Schedule(rate) => format!("schedule {rate}"),
-            Request::Edit(Edit::Undo) => "undo".into(),
-            Request::Edit(Edit::Redo) => "redo".into(),
-            Request::Edit(Edit::Apply(command)) => match command {
-                Command::AddTrack => "add-track".into(),
-                Command::AddClip {
-                    track,
-                    start,
-                    length,
-                } => format!("add-clip {track} {start} {length}"),
-                Command::MoveClip { id, track, start } => format!("move-clip {id} {track} {start}"),
-                Command::SplitClip { id, tick } => format!("split-clip {id} {tick}"),
-                Command::DeleteClip { id } => format!("delete-clip {id}"),
-                Command::SetTempo {
-                    tick,
-                    us_per_quarter,
-                } => format!("set-tempo {tick} {us_per_quarter}"),
-                Command::RemoveTempo { tick } => format!("remove-tempo {tick}"),
-                Command::AddNote {
-                    id,
-                    start,
-                    length,
-                    pitch,
-                    velocity,
-                } => format!("add-note {id} {start} {length} {pitch} {velocity}"),
-                Command::RemoveNote { id, start, pitch } => {
-                    format!("remove-note {id} {start} {pitch}")
-                }
-            },
+            Request::Edit(edit) => edit.to_string(),
         }
     }
 }
@@ -229,6 +203,15 @@ fn model_path() -> PathBuf {
 
 /// The replies of the Lean model to a trace.
 fn model_replies(trace: &[Request]) -> Vec<String> {
+    let input: String = trace
+        .iter()
+        .map(|request| request.encode() + "\n")
+        .collect();
+    model_replies_to(&input)
+}
+
+/// The replies of the Lean model to lines in its trace format.
+fn model_replies_to(input: &str) -> Vec<String> {
     let path = model_path();
     let mut model = Process::new(&path)
         .stdin(Stdio::piped())
@@ -240,10 +223,6 @@ fn model_replies(trace: &[Request]) -> Vec<String> {
                 path.display()
             )
         });
-    let input: String = trace
-        .iter()
-        .map(|request| request.encode() + "\n")
-        .collect();
     model
         .stdin
         .take()
@@ -460,6 +439,27 @@ proptest! {
     #[test]
     fn core_agrees_with_model(trace in trace()) {
         prop_assert_eq!(core_replies(&trace), model_replies(&trace));
+    }
+
+    /// The project file of the edits the core accepts loads into the same
+    /// history in the core, and the model accepts every line of it and ends in
+    /// the same state (ADR 19).
+    #[test]
+    fn a_saved_document_loads_the_same_in_the_core_and_the_model(trace in trace()) {
+        let mut document = Document::default();
+        for request in &trace {
+            if let Request::Edit(edit) = *request {
+                let _ = document.edit(edit);
+            }
+        }
+        let file = document.save();
+        prop_assert_eq!(&Document::load(&file).unwrap(), &document);
+        let replies = model_replies_to(&file);
+        prop_assert_eq!(replies.len(), file.lines().count());
+        prop_assert!(replies.iter().all(|reply| reply.starts_with("ok ")), "{:?}", replies);
+        if let Some(last) = replies.last() {
+            prop_assert_eq!(last, &format!("ok {}", render(document.history())));
+        }
     }
 }
 
