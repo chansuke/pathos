@@ -15,8 +15,9 @@
       ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
-      # Libraries gpui links against or loads with dlopen at runtime on Linux
-      # (Vulkan via blade, Wayland/X11 windowing, xkbcommon keymaps, fonts).
+      # Libraries gpui and cpal link against or load with dlopen at runtime on
+      # Linux (Vulkan via blade, Wayland/X11 windowing, xkbcommon keymaps, fonts,
+      # ALSA).
       linuxRuntimeLibs =
         pkgs: with pkgs; [
           fontconfig
@@ -29,7 +30,22 @@
           libxi
           libxrandr
           libxcb
+          # cpal plays through ALSA (ADR 18).
+          alsa-lib
         ];
+
+      # The ALSA plugins that a host's configuration may route the default
+      # device through, such as PipeWire's or PulseAudio's. Nix's alsa-lib
+      # does not look for them where the host keeps its own.
+      alsaPlugins =
+        pkgs:
+        pkgs.symlinkJoin {
+          name = "pathos-alsa-plugins";
+          paths = [
+            "${pkgs.pipewire}/lib/alsa-lib"
+            "${pkgs.alsa-plugins}/lib/alsa-lib"
+          ];
+        };
     in
     {
       packages = forAllSystems (
@@ -58,7 +74,8 @@
 
             postFixup = lib.optionalString stdenv.hostPlatform.isLinux ''
               wrapProgram $out/bin/pathos \
-                --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath (linuxRuntimeLibs pkgs)}
+                --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath (linuxRuntimeLibs pkgs)} \
+                --set-default ALSA_PLUGIN_DIR ${alsaPlugins pkgs}
             '';
           };
         }
@@ -91,6 +108,7 @@
             }
             // lib.optionalAttrs stdenv.hostPlatform.isLinux {
               LD_LIBRARY_PATH = lib.makeLibraryPath (linuxRuntimeLibs pkgs);
+              ALSA_PLUGIN_DIR = alsaPlugins pkgs;
 
               # Override a host-level ~/.cargo/config.toml linker so binaries link
               # against Nix glibc, matching the libraries in LD_LIBRARY_PATH.

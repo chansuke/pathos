@@ -7,6 +7,8 @@ use gpui::{
     prelude::*, px, rgb, size,
 };
 use pathos_core::{PPQ, Project};
+use pathos_playback::output::Output;
+use pathos_render::Score;
 
 use editor::{Editor, Input, Key};
 use layout::{
@@ -23,20 +25,51 @@ const SELECTED_CLIP: u32 = 0x5b9bd5;
 const NOTE: u32 = 0xe8c547;
 const TEXT: u32 = 0xd0d0d0;
 const ERROR: u32 = 0xe06c75;
+const PLAYHEAD: u32 = 0xf0f0f0;
 
 const HINT: &str = "Double-click a lane: add a clip · Drag a clip: move · S: split at the pointer · \
                     Delete: delete · T: add a track · Click the piano roll: add or remove a note · \
-                    Ctrl-Z / Ctrl-Shift-Z: undo / redo";
+                    Ctrl-Z / Ctrl-Shift-Z: undo / redo · Space: play / stop · Home: to the start";
 
 struct Pathos {
     editor: Editor,
     focus: FocusHandle,
+    /// The audio device, or why it could not be opened. Editing works
+    /// without one.
+    output: Result<Output, String>,
 }
 
 impl Pathos {
     fn handle(&mut self, input: Input, cx: &mut Context<Self>) {
-        self.editor.handle(input);
+        if self.editor.handle(input) {
+            self.publish();
+        }
         cx.notify();
+    }
+
+    /// Hands the project as it is now to the audio thread (ADR 18).
+    fn publish(&self) {
+        if let Ok(output) = &self.output {
+            output.publish(Score::new(
+                self.editor.history().present(),
+                output.sample_rate(),
+            ));
+        }
+    }
+
+    fn handle_transport(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        let Ok(output) = &self.output else {
+            return false;
+        };
+        let transport = output.transport();
+        match event.keystroke.key.as_str() {
+            "space" if transport.is_playing() => transport.stop(),
+            "space" => transport.play(),
+            "home" => transport.seek(0),
+            _ => return false,
+        }
+        cx.notify();
+        true
     }
 }
 
@@ -45,10 +78,27 @@ impl Render for Pathos {
         let project = self.editor.history().present();
         let selected = self.editor.selected();
         let width = f32::from(window.viewport_size().width);
-        let status = match self.editor.rejected() {
-            Some(error) => div().text_color(rgb(ERROR)).child(error.to_string()),
-            None => div().child(HINT),
+        let status = match (self.editor.rejected(), &self.output) {
+            (Some(error), _) => div().text_color(rgb(ERROR)).child(error.to_string()),
+            (None, Err(error)) => div()
+                .text_color(rgb(ERROR))
+                .child(format!("No audio output: {error}")),
+            (None, Ok(_)) => div().child(HINT),
         };
+        let playhead = self.output.as_ref().ok().map(|output| {
+            output.collect();
+            let transport = output.transport();
+            if transport.is_playing() {
+                window.request_animation_frame();
+            }
+            at(Rect {
+                x: layout::playhead_x(project, output.sample_rate(), transport.position()),
+                y: STATUS_HEIGHT,
+                width: 1.0,
+                height: project.track_count() as f32 * LANE_HEIGHT,
+            })
+            .bg(rgb(PLAYHEAD))
+        });
 
         div()
             .size_full()
@@ -58,6 +108,9 @@ impl Render for Pathos {
             .text_xs()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                if this.handle_transport(event, cx) {
+                    return;
+                }
                 if let Some(key) = key(event) {
                     this.handle(Input::Key(key), cx);
                 }
@@ -112,6 +165,7 @@ impl Render for Pathos {
                     .children(thumbnail(project, clip.id, clip.length))
             }))
             .children(selected.map(|id| piano_roll(project, id)))
+            .children(playhead)
     }
 }
 
@@ -277,9 +331,14 @@ fn main() {
                 cx.new(|cx| {
                     let focus = cx.focus_handle();
                     focus.focus(window);
+                    let output = Output::open().map_err(|error| error.to_string());
+                    if let Err(error) = &output {
+                        eprintln!("no audio output: {error}");
+                    }
                     Pathos {
                         editor: Editor::default(),
                         focus,
+                        output,
                     }
                 })
             },

@@ -1,0 +1,21 @@
+[package]
+name = "pathos-playback"
+description = "Real-time playback of pathos (ADR 18)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+cpal = "0.18"
+pathos-core = { path = "../pathos-core", version = "0.1.0" }
+pathos-render = { path = "../pathos-render", version = "0.1.0" }
+
+[target.'cfg(loom)'.dependencies]
+loom = "0.7"
+
+[lints.rust]
+# The loom tests build with `--cfg loom` (ADR 18).
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }

@@ -5,7 +5,7 @@
 use std::num::NonZeroU32;
 
 use pathos_core::{Command, Edit, Event, History, Project};
-use pathos_render::render;
+use pathos_render::{Score, render};
 use proptest::prelude::*;
 
 /// At 120 BPM, 960 ticks last half a second.
@@ -133,6 +133,34 @@ proptest! {
         }
     }
 
+    /// Blocks rendered one after another, as playback renders them, join into
+    /// the render of the whole (ADR 18).
+    #[test]
+    fn blocks_join_into_the_render(
+        notes in prop::collection::vec(note(), 0..8),
+        rate in rate(),
+        sizes in prop::collection::vec(1usize..5000, 1..40),
+    ) {
+        let project = project(&notes);
+        let frames = 4 * rate.get() as usize;
+        let whole = render(&project, rate, frames);
+        let score = Score::new(&project, rate);
+        let mut joined = Vec::new();
+        let mut block = Vec::new();
+        for size in sizes.iter().cycle() {
+            if joined.len() >= frames {
+                break;
+            }
+            // Leftover samples in the buffer must not leak into the block.
+            block.clear();
+            block.resize((*size).min(frames - joined.len()), 1.0);
+            score.render(joined.len() as u64, &mut block);
+            joined.extend_from_slice(&block);
+        }
+        let bits = |samples: &[f32]| samples.iter().map(|sample| sample.to_bits()).collect::<Vec<_>>();
+        prop_assert_eq!(bits(&joined), bits(&whole));
+    }
+
     /// Notes on different tracks add up: the render of both is the sum of the
     /// render of each.
     #[test]
@@ -202,7 +230,7 @@ fn a_render_is_the_same_everywhere() {
                 (hash ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3)
             })
     });
-    assert_eq!(hash, 0x2ae3_22ca_82f4_62b4, "render hash {hash:#018x}");
+    assert_eq!(hash, 0x615c_6c63_2423_a304, "render hash {hash:#018x}");
 }
 
 /// Rendering twice gives the same samples.

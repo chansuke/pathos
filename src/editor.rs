@@ -67,13 +67,16 @@ impl Editor {
         self.rejected
     }
 
-    pub fn handle(&mut self, input: Input) {
-        if let Some(edit) = self.edit_for(input) {
-            if let Edit::Apply(Command::AddClip { .. }) = edit {
-                self.selected = Some(self.history.next_clip_id());
-            }
-            self.rejected = self.history.edit(edit).err();
+    /// Handles `input` and returns whether the project changed.
+    pub fn handle(&mut self, input: Input) -> bool {
+        let Some(edit) = self.edit_for(input) else {
+            return false;
+        };
+        if let Edit::Apply(Command::AddClip { .. }) = edit {
+            self.selected = Some(self.history.next_clip_id());
         }
+        self.rejected = self.history.edit(edit).err();
+        self.rejected.is_none()
     }
 
     /// The edit `input` makes, if any, after updating the selection, the drag
@@ -364,6 +367,18 @@ mod tests {
         assert_edits(&editor, &SETUP);
         editor.handle(Input::Key(Key::AddTrack));
         assert_eq!(editor.rejected(), None);
+    }
+
+    #[test]
+    fn handling_reports_whether_the_project_changed() {
+        let mut editor = with_clip();
+        let (x, y) = in_lane(0, 5.0);
+        assert!(!editor.handle(Input::Down { x, y, clicks: 1 }));
+        assert!(!editor.handle(Input::Up { x, y }));
+        let (x, y) = in_lane(0, 2.0);
+        assert!(!editor.handle(Input::Down { x, y, clicks: 2 }), "rejected");
+        assert!(editor.handle(Input::Key(Key::AddTrack)));
+        assert!(editor.handle(Input::Key(Key::Undo)));
     }
 
     #[test]

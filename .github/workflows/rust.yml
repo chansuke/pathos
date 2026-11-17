@@ -31,6 +31,13 @@ jobs:
       # The editor and the layout are plain Rust, so their tests need no window.
       - name: Test the app
         run: nix develop -c cargo test -p pathos
+      # The loom tests run every interleaving of the snapshot hand-off within
+      # their bound and check the invariants of tla/SnapshotHandoff.tla
+      # (ADR 18).
+      - name: Test the playback hand-off
+        run: |
+          nix develop -c cargo test -p pathos-playback
+          nix develop -c sh -c 'RUSTFLAGS="$RUSTFLAGS --cfg loom" cargo test -p pathos-playback --release --target-dir target/loom'
 
   # The render needs no model, so its tests run here rather than with the
   # differential tests. Its hash test fails if a render depends on the platform
