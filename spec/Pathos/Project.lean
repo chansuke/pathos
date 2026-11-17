@@ -26,6 +26,19 @@ def maxPitch : Nat := 127
 velocity is at least 1. -/
 def maxVelocity : Nat := 127
 
+/-- The loudest track volume, a gain of 2 (ADR 20). -/
+def maxVolume : Nat := 2000
+
+/-- The volume of a new track, a gain of 1. -/
+def unityVolume : Nat := 1000
+
+/-- A track's volume is its gain in thousandths (ADR 20). A muted track is not
+heard. -/
+structure Track where
+  volume : Nat := unityVolume
+  muted : Bool := false
+  deriving Repr, DecidableEq
+
 /-- From `tick` onwards a quarter note lasts `usPerQuarter` microseconds. -/
 structure TempoChange where
   tick : Tick
@@ -70,16 +83,18 @@ def Clip.overlaps (a b : Clip) : Bool :=
 /-- A project. The id the next created clip receives is not part of it but of
 the history, so that undo does not reissue ids (ADR 10). -/
 structure Project where
-  trackCount : Nat
+  tracks : List Track
   /-- Ordered by tick, starting at tick 0. -/
   tempo : List TempoChange
   /-- Ordered by id. -/
   clips : List Clip
   deriving Repr, DecidableEq
 
+def Project.trackCount (p : Project) : Nat := p.tracks.length
+
 /-- An empty project at 120 BPM. -/
 def Project.initial : Project :=
-  { trackCount := 0, tempo := [⟨0, 500000⟩], clips := [] }
+  { tracks := [], tempo := [⟨0, 500000⟩], clips := [] }
 
 inductive Command where
   | addTrack
@@ -96,6 +111,8 @@ inductive Command where
   | addNote (id : Nat) (start : Tick) (length : Nat) (pitch : Nat) (velocity : Nat)
   /-- Remove the note of `pitch` that starts `start` ticks into a clip. -/
   | removeNote (id : Nat) (start : Tick) (pitch : Nat)
+  | setTrackVolume (track : Nat) (volume : Nat)
+  | setTrackMute (track : Nat) (muted : Bool)
   deriving Repr, DecidableEq
 
 inductive Error where
@@ -113,6 +130,7 @@ inductive Error where
   | noteOutsideClip
   | noteOverlap
   | unknownNote
+  | invalidVolume
   | nothingToUndo
   | nothingToRedo
   deriving Repr, DecidableEq
@@ -147,7 +165,7 @@ receives. Returns the project and the id after the command. A rejected command
 leaves no trace: the caller keeps the project and the id it had. Checks run in
 the order written, which fixes the error reported when several apply. -/
 def step (p : Project) (nextClipId : Nat) : Command → Except Error (Project × Nat)
-  | .addTrack => pure ({ p with trackCount := p.trackCount + 1 }, nextClipId)
+  | .addTrack => pure ({ p with tracks := p.tracks ++ [{}] }, nextClipId)
   | .addClip track start length => do
     if length == 0 then throw .emptyClip
     if track ≥ p.trackCount then throw .unknownTrack
@@ -203,6 +221,13 @@ def step (p : Project) (nextClipId : Nat) : Command → Except Error (Project ×
     if !clip.notes.any named then throw .unknownNote
     let clip := { clip with notes := clip.notes.filter (!named ·) }
     pure ({ p with clips := p.replaceClip clip }, nextClipId)
+  | .setTrackVolume track volume => do
+    let some t := p.tracks[track]? | throw .unknownTrack
+    if volume > maxVolume then throw .invalidVolume
+    pure ({ p with tracks := p.tracks.set track { t with volume } }, nextClipId)
+  | .setTrackMute track muted => do
+    let some t := p.tracks[track]? | throw .unknownTrack
+    pure ({ p with tracks := p.tracks.set track { t with muted } }, nextClipId)
 
 /-- `ppq` times the microseconds from the first tempo change to `tick`. -/
 def microsTimesPpq : List TempoChange → Tick → Nat
@@ -262,9 +287,13 @@ where
     | [_] => true
     | current :: next :: rest => current.id < next.id && ordered (next :: rest)
 
+/-- Every track's volume is in range. -/
+def tracksWellFormed (p : Project) : Bool :=
+  p.tracks.all (·.volume ≤ maxVolume)
+
 /-- `p` is well-formed when the next created clip receives `nextClipId`. -/
 def Project.wellFormed (p : Project) (nextClipId : Nat) : Bool :=
-  tempoWellFormed p.tempo && clipsWellFormed p nextClipId
+  tracksWellFormed p && tempoWellFormed p.tempo && clipsWellFormed p nextClipId
 
 /-! ## Properties -/
 

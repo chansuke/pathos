@@ -33,6 +33,10 @@ def Request.parse (line : String) : Option Request := do
   | "add-note", [id, start, length, pitch, velocity] =>
     some (.edit (.apply (.addNote id start length pitch velocity)))
   | "remove-note", [id, start, pitch] => some (.edit (.apply (.removeNote id start pitch)))
+  | "set-track-volume", [track, volume] =>
+    some (.edit (.apply (.setTrackVolume track volume)))
+  | "mute-track", [track] => some (.edit (.apply (.setTrackMute track true)))
+  | "unmute-track", [track] => some (.edit (.apply (.setTrackMute track false)))
   | "undo", [] => some (.edit .undo)
   | "redo", [] => some (.edit .redo)
   | "micros", [tick] => some (.micros tick)
@@ -54,6 +58,7 @@ def Error.name : Error → String
   | .noteOutsideClip => "note-outside-clip"
   | .noteOverlap => "note-overlap"
   | .unknownNote => "unknown-note"
+  | .invalidVolume => "invalid-volume"
   | .nothingToUndo => "nothing-to-undo"
   | .nothingToRedo => "nothing-to-redo"
 
@@ -63,7 +68,8 @@ def History.render (h : History) : String :=
   let clips := p.clips.map fun c =>
     let notes := c.notes.map fun n => s!"{n.start}/{n.length}/{n.pitch}/{n.velocity}"
     s!"{c.id}:{c.track}:{c.start}:{c.length}[{";".intercalate notes}]"
-  s!"tracks={p.trackCount} next={h.nextClipId} tempo={",".intercalate tempo} "
+  let tracks := p.tracks.map fun t => s!"{t.volume}{if t.muted then "m" else ""}"
+  s!"tracks={",".intercalate tracks} next={h.nextClipId} tempo={",".intercalate tempo} "
     ++ s!"clips={",".intercalate clips} undo={h.past.length} redo={h.future.length}"
 
 def Event.render : Event → String
