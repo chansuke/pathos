@@ -105,7 +105,9 @@ impl<T> Player<T> {
                 let new = unsafe { Box::from_raw(new) };
                 if let Some(old) = self.playing.replace(new) {
                     // Only this thread sets the retired place, and it was
-                    // empty, so this overwrites nothing.
+                    // empty, so this overwrites nothing. A store would do, but
+                    // loom then lets a later swap in `collect` miss it
+                    // (https://github.com/tokio-rs/loom/issues/254).
                     let overwritten = self
                         .shared
                         .retired
