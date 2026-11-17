@@ -48,6 +48,11 @@ impl fmt::Display for Edit {
                     track,
                     muted: false,
                 } => write!(f, "unmute-track {track}"),
+                Command::SetTrackSolo { track, solo: true } => write!(f, "solo-track {track}"),
+                Command::SetTrackSolo { track, solo: false } => {
+                    write!(f, "unsolo-track {track}")
+                }
+                Command::SetTrackPan { track, pan } => write!(f, "set-track-pan {track} {pan}"),
             },
         }
     }
@@ -113,6 +118,9 @@ impl FromStr for Edit {
                 track,
                 muted: false,
             },
+            ("solo-track", &[track]) => Command::SetTrackSolo { track, solo: true },
+            ("unsolo-track", &[track]) => Command::SetTrackSolo { track, solo: false },
+            ("set-track-pan", &[track, pan]) => Command::SetTrackPan { track, pan },
             _ => return Err(UnrecognizedEdit),
         };
         Ok(Edit::Apply(command))

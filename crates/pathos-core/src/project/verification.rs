@@ -37,7 +37,10 @@ fn well_formed(p: &Project, next_clip_id: u64) -> bool {
     // The tracks that differ from a new one exist, are in range, differ and
     // are ordered by index.
     let mixed = p.mixed.iter().all(|(index, track)| {
-        *index < p.track_count && track.volume <= MAX_VOLUME && *track != Track::default()
+        *index < p.track_count
+            && track.volume <= MAX_VOLUME
+            && track.pan <= MAX_PAN
+            && *track != Track::default()
     }) && p.mixed.windows(2).all(|pair| pair[0].0 < pair[1].0);
     tempo
         && mixed
@@ -399,6 +402,51 @@ apply_harness!(
     }
 );
 
+apply_harness!(
+    set_track_solo_with_1_mixed,
+    tempo = 1,
+    clips = 0,
+    notes = 0,
+    mixed = 1,
+    Command::SetTrackSolo {
+        track: kani::any(),
+        solo: kani::any(),
+    }
+);
+apply_harness!(
+    set_track_solo_with_2_mixed,
+    tempo = 1,
+    clips = 0,
+    notes = 0,
+    mixed = 2,
+    Command::SetTrackSolo {
+        track: kani::any(),
+        solo: kani::any(),
+    }
+);
+apply_harness!(
+    set_track_pan_with_1_mixed,
+    tempo = 1,
+    clips = 0,
+    notes = 0,
+    mixed = 1,
+    Command::SetTrackPan {
+        track: kani::any(),
+        pan: kani::any(),
+    }
+);
+apply_harness!(
+    set_track_pan_with_2_mixed,
+    tempo = 1,
+    clips = 0,
+    notes = 0,
+    mixed = 2,
+    Command::SetTrackPan {
+        track: kani::any(),
+        pan: kani::any(),
+    }
+);
+
 /// The harnesses of each command. A new command does not compile until it is
 /// given one here.
 #[allow(dead_code)]
@@ -421,6 +469,8 @@ fn harnesses(command: Command) -> &'static [fn()] {
             &[set_track_volume_with_1_mixed, set_track_volume_with_2_mixed]
         }
         Command::SetTrackMute { .. } => &[set_track_mute_with_1_mixed, set_track_mute_with_2_mixed],
+        Command::SetTrackSolo { .. } => &[set_track_solo_with_1_mixed, set_track_solo_with_2_mixed],
+        Command::SetTrackPan { .. } => &[set_track_pan_with_1_mixed, set_track_pan_with_2_mixed],
     }
 }
 

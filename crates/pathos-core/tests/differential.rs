@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use std::process::{Command as Process, Stdio};
 
 use pathos_core::{
-    Command, Document, Edit, EditError, Event, History, MAX_PITCH, MAX_TICK, MAX_US_PER_QUARTER,
-    MAX_VELOCITY, MAX_VOLUME, UNITY_VOLUME,
+    CENTER_PAN, Command, Document, Edit, EditError, Event, History, MAX_PAN, MAX_PITCH, MAX_TICK,
+    MAX_US_PER_QUARTER, MAX_VELOCITY, MAX_VOLUME, UNITY_VOLUME,
 };
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
@@ -66,6 +66,7 @@ errors! {
     NoteOverlap => "note-overlap",
     UnknownNote => "unknown-note",
     InvalidVolume => "invalid-volume",
+    InvalidPan => "invalid-pan",
     NothingToUndo => "nothing-to-undo",
     NothingToRedo => "nothing-to-redo",
 }
@@ -110,6 +111,9 @@ request_kinds! {
     Request::Edit(Edit::Apply(Command::SetTrackVolume { .. })) => "set-track-volume",
     Request::Edit(Edit::Apply(Command::SetTrackMute { muted: true, .. })) => "mute-track",
     Request::Edit(Edit::Apply(Command::SetTrackMute { muted: false, .. })) => "unmute-track",
+    Request::Edit(Edit::Apply(Command::SetTrackSolo { solo: true, .. })) => "solo-track",
+    Request::Edit(Edit::Apply(Command::SetTrackSolo { solo: false, .. })) => "unsolo-track",
+    Request::Edit(Edit::Apply(Command::SetTrackPan { .. })) => "set-track-pan",
     Request::Edit(Edit::Undo) => "undo",
     Request::Edit(Edit::Redo) => "redo",
     Request::Micros(_) => "micros",
@@ -121,8 +125,9 @@ fn render(history: &History) -> String {
     let tracks: Vec<String> = (0..project.track_count())
         .map(|index| {
             let track = project.track(index).unwrap();
-            let mark = if track.muted { "m" } else { "" };
-            format!("{}{mark}", track.volume)
+            let muted = if track.muted { "m" } else { "" };
+            let solo = if track.solo { "s" } else { "" };
+            format!("{}:{}{muted}{solo}", track.volume, track.pan)
         })
         .collect();
     let tempo: Vec<String> = project
@@ -338,6 +343,22 @@ fn volume() -> impl Strategy<Value = u64> {
     ]
 }
 
+/// Mostly pans in range, with the limits of the range.
+fn pan() -> impl Strategy<Value = u64> {
+    let max = u64::from(MAX_PAN);
+    prop_oneof![
+        8 => 0..=max,
+        2 => prop_oneof![
+            Just(0),
+            Just(u64::from(CENTER_PAN)),
+            Just(max),
+            Just(max + 1),
+            Just(u64::from(u8::MAX) + 1),
+            Just(u64::MAX),
+        ],
+    ]
+}
+
 fn command() -> impl Strategy<Value = Command> {
     let track = 0u64..3;
     // Few clips exist in a trace, so small ids mostly name one, and the rest
@@ -370,8 +391,11 @@ fn command() -> impl Strategy<Value = Command> {
             .prop_map(|(id, start, pitch)| Command::RemoveNote { id, start, pitch }),
         2 => (track.clone(), volume())
             .prop_map(|(track, volume)| Command::SetTrackVolume { track, volume }),
-        2 => (track, any::<bool>())
+        2 => (track.clone(), any::<bool>())
             .prop_map(|(track, muted)| Command::SetTrackMute { track, muted }),
+        2 => (track.clone(), any::<bool>())
+            .prop_map(|(track, solo)| Command::SetTrackSolo { track, solo }),
+        2 => (track, pan()).prop_map(|(track, pan)| Command::SetTrackPan { track, pan }),
     ]
 }
 
@@ -418,14 +442,15 @@ fn sample_rate() -> impl Strategy<Value = u64> {
 /// trace are otherwise empty, which leaves the order of events barely tested.
 fn notes_then_schedule() -> impl Strategy<Value = Vec<Request>> {
     let note = (note_start(), note_length(), pitch(), velocity());
-    let mute = prop::option::of(0u64..3);
+    // A track to mute, or to solo when the flag is set.
+    let silence = prop::option::of((0u64..3, any::<bool>()));
     (
         0u64..2,
         prop::collection::vec(note, 1..6),
-        mute,
+        silence,
         sample_rate(),
     )
-        .prop_map(|(id, notes, mute, rate)| {
+        .prop_map(|(id, notes, silence, rate)| {
             let mut requests: Vec<Request> = notes
                 .into_iter()
                 .map(|(start, length, pitch, velocity)| {
@@ -438,12 +463,15 @@ fn notes_then_schedule() -> impl Strategy<Value = Vec<Request>> {
                     }))
                 })
                 .collect();
-            // A muted track leaves its notes out of the schedule (ADR 20).
-            if let Some(track) = mute {
-                requests.push(Request::Edit(Edit::Apply(Command::SetTrackMute {
-                    track,
-                    muted: true,
-                })));
+            // A muted track leaves its notes out of the schedule (ADR 20), and
+            // a soloed one those of the other tracks (ADR 21).
+            if let Some((track, solo)) = silence {
+                let command = if solo {
+                    Command::SetTrackSolo { track, solo }
+                } else {
+                    Command::SetTrackMute { track, muted: true }
+                };
+                requests.push(Request::Edit(Edit::Apply(command)));
             }
             requests.push(Request::Schedule(rate));
             requests
@@ -577,6 +605,61 @@ fn core_agrees_with_model_on_boundaries() {
             }),
             Request::Schedule(48_000),
             Request::Edit(Edit::Undo),
+            Request::Schedule(48_000),
+        ],
+        // A pan may reach the maximum but not exceed it, also beyond u8. A
+        // solo silences the other tracks, a muted solo is silent, and the
+        // schedule returns when the last solo ends.
+        vec![
+            apply(AddTrack),
+            apply(AddTrack),
+            apply(SetTrackPan {
+                track: 0,
+                pan: u64::from(MAX_PAN),
+            }),
+            apply(SetTrackPan {
+                track: 0,
+                pan: u64::from(MAX_PAN) + 1,
+            }),
+            apply(SetTrackPan {
+                track: 0,
+                pan: u64::from(u8::MAX) + 1 + 100,
+            }),
+            apply(SetTrackPan { track: 2, pan: 0 }),
+            add_clip(0, 960),
+            apply(AddClip {
+                track: 1,
+                start: 0,
+                length: 960,
+            }),
+            apply(AddNote {
+                id: 0,
+                start: 0,
+                length: 240,
+                pitch: 60,
+                velocity: 100,
+            }),
+            apply(AddNote {
+                id: 1,
+                start: 0,
+                length: 240,
+                pitch: 64,
+                velocity: 100,
+            }),
+            apply(SetTrackSolo {
+                track: 1,
+                solo: true,
+            }),
+            Request::Schedule(48_000),
+            apply(SetTrackMute {
+                track: 1,
+                muted: true,
+            }),
+            Request::Schedule(48_000),
+            apply(SetTrackSolo {
+                track: 1,
+                solo: false,
+            }),
             Request::Schedule(48_000),
         ],
         // Clips that touch do not overlap; sharing one tick does.
