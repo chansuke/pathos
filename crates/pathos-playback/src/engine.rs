@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use pathos_render::Score;
+use pathos_render::{Frame, Score};
 
 use crate::handoff::Player;
 
@@ -63,7 +63,7 @@ pub struct Engine {
     player: Player<Score>,
     transport: Arc<Transport>,
     position: u64,
-    mono: Box<[f32]>,
+    frames: Box<[Frame]>,
 }
 
 impl Engine {
@@ -72,14 +72,15 @@ impl Engine {
             player,
             transport,
             position: 0,
-            mono: vec![0.0; CHUNK].into_boxed_slice(),
+            frames: vec![[0.0; 2]; CHUNK].into_boxed_slice(),
         }
     }
 
     /// Fills `out`, whose frames each have `channels` samples, with the next
-    /// frames of the newest score, the same in every channel. It is silent
-    /// while stopped or before a score is published. It does not wait,
-    /// allocate or free.
+    /// frames of the newest score: the left and the right channel in the
+    /// first two, silence in any further one, and the mean of both on a
+    /// device with one channel (ADR 21). It is silent while stopped or before
+    /// a score is published. It does not wait, allocate or free.
     pub fn fill(&mut self, out: &mut [f32], channels: usize) {
         let seek = self.transport.seek.swap(NO_SEEK, Ordering::Relaxed);
         if seek != NO_SEEK {
@@ -89,12 +90,20 @@ impl Engine {
         match self.player.current() {
             Some(score) if playing => {
                 for block in out.chunks_mut(CHUNK * channels) {
-                    let mono = &mut self.mono[..block.len() / channels];
-                    score.render(self.position, mono);
-                    for (frame, &sample) in block.chunks_mut(channels).zip(mono.iter()) {
-                        frame.fill(sample);
+                    let frames = &mut self.frames[..block.len() / channels];
+                    score.render(self.position, frames);
+                    for (out, &[left, right]) in block.chunks_mut(channels).zip(frames.iter()) {
+                        match out {
+                            [mono] => *mono = (left + right) * 0.5,
+                            [out_left, out_right, rest @ ..] => {
+                                *out_left = left;
+                                *out_right = right;
+                                rest.fill(0.0);
+                            }
+                            [] => {}
+                        }
                     }
-                    self.position += mono.len() as u64;
+                    self.position += frames.len() as u64;
                 }
             }
             _ => out.fill(0.0),

@@ -7,6 +7,10 @@ exclude_globs = [
 ]
 
 exclude_re = [
+    # Dividing the samples of a part by the channels instead of multiplying
+    # only makes the engine render in smaller parts, which join into the same
+    # output (ADR 18). The line is named so that no other mutant is excluded.
+    "engine.rs:92:51: replace \\* with / in Engine::fill",
     # When `tick` equals the next change's tick, both branches stop at `tick`,
     # so `>=` computes the same time as `>`.
     "replace > with >= in Project::tick_to_micros",
