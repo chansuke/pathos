@@ -31,10 +31,9 @@ const TEXT: u32 = 0xd0d0d0;
 const ERROR: u32 = 0xe06c75;
 const PLAYHEAD: u32 = 0xf0f0f0;
 
-const HINT: &str = "Double-click a lane: add a clip · Drag a clip: move · S: split at the pointer · \
-                    Delete: delete · T: add a track · Click the piano roll: add or remove a note · \
-                    Ctrl-Z / Ctrl-Shift-Z: undo / redo · Space: play / stop · Home: to the start · \
-                    Ctrl-S / Ctrl-Shift-S: save / save as · Ctrl-O: open";
+const HINT: &str = "T: track · Double-click a lane: clip · Drag: move · S: split · Delete: delete · \
+                    Click the roll: note · Ctrl-Z / Ctrl-Shift-Z: undo / redo · Space: play · \
+                    Home: start · Ctrl-S: save · Ctrl-O: open";
 
 /// The outcome of the last save or open, shown until the next accepted edit.
 enum Notice {
