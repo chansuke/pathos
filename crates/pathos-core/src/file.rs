@@ -40,6 +40,14 @@ impl fmt::Display for Edit {
                 Command::RemoveNote { id, start, pitch } => {
                     write!(f, "remove-note {id} {start} {pitch}")
                 }
+                Command::SetTrackVolume { track, volume } => {
+                    write!(f, "set-track-volume {track} {volume}")
+                }
+                Command::SetTrackMute { track, muted: true } => write!(f, "mute-track {track}"),
+                Command::SetTrackMute {
+                    track,
+                    muted: false,
+                } => write!(f, "unmute-track {track}"),
             },
         }
     }
@@ -99,6 +107,12 @@ impl FromStr for Edit {
                 velocity,
             },
             ("remove-note", &[id, start, pitch]) => Command::RemoveNote { id, start, pitch },
+            ("set-track-volume", &[track, volume]) => Command::SetTrackVolume { track, volume },
+            ("mute-track", &[track]) => Command::SetTrackMute { track, muted: true },
+            ("unmute-track", &[track]) => Command::SetTrackMute {
+                track,
+                muted: false,
+            },
             _ => return Err(UnrecognizedEdit),
         };
         Ok(Edit::Apply(command))

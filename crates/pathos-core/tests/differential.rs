@@ -11,7 +11,7 @@ use std::process::{Command as Process, Stdio};
 
 use pathos_core::{
     Command, Document, Edit, EditError, Event, History, MAX_PITCH, MAX_TICK, MAX_US_PER_QUARTER,
-    MAX_VELOCITY,
+    MAX_VELOCITY, MAX_VOLUME, UNITY_VOLUME,
 };
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
@@ -65,6 +65,7 @@ errors! {
     NoteOutsideClip => "note-outside-clip",
     NoteOverlap => "note-overlap",
     UnknownNote => "unknown-note",
+    InvalidVolume => "invalid-volume",
     NothingToUndo => "nothing-to-undo",
     NothingToRedo => "nothing-to-redo",
 }
@@ -106,6 +107,9 @@ request_kinds! {
     Request::Edit(Edit::Apply(Command::RemoveTempo { .. })) => "remove-tempo",
     Request::Edit(Edit::Apply(Command::AddNote { .. })) => "add-note",
     Request::Edit(Edit::Apply(Command::RemoveNote { .. })) => "remove-note",
+    Request::Edit(Edit::Apply(Command::SetTrackVolume { .. })) => "set-track-volume",
+    Request::Edit(Edit::Apply(Command::SetTrackMute { muted: true, .. })) => "mute-track",
+    Request::Edit(Edit::Apply(Command::SetTrackMute { muted: false, .. })) => "unmute-track",
     Request::Edit(Edit::Undo) => "undo",
     Request::Edit(Edit::Redo) => "redo",
     Request::Micros(_) => "micros",
@@ -114,6 +118,13 @@ request_kinds! {
 
 fn render(history: &History) -> String {
     let project = history.present();
+    let tracks: Vec<String> = (0..project.track_count())
+        .map(|index| {
+            let track = project.track(index).unwrap();
+            let mark = if track.muted { "m" } else { "" };
+            format!("{}{mark}", track.volume)
+        })
+        .collect();
     let tempo: Vec<String> = project
         .tempo()
         .iter()
@@ -144,7 +155,7 @@ fn render(history: &History) -> String {
         .collect();
     format!(
         "tracks={} next={} tempo={} clips={} undo={} redo={}",
-        project.track_count(),
+        tracks.join(","),
         history.next_clip_id(),
         tempo.join(","),
         clips.join(","),
@@ -311,6 +322,22 @@ fn velocity() -> impl Strategy<Value = u64> {
     ]
 }
 
+/// Mostly volumes in range, with the limits of the range.
+fn volume() -> impl Strategy<Value = u64> {
+    let max = u64::from(MAX_VOLUME);
+    prop_oneof![
+        8 => 0..=max,
+        2 => prop_oneof![
+            Just(0),
+            Just(u64::from(UNITY_VOLUME)),
+            Just(max),
+            Just(max + 1),
+            Just(u64::from(u16::MAX) + 1),
+            Just(u64::MAX),
+        ],
+    ]
+}
+
 fn command() -> impl Strategy<Value = Command> {
     let track = 0u64..3;
     // Few clips exist in a trace, so small ids mostly name one, and the rest
@@ -323,13 +350,13 @@ fn command() -> impl Strategy<Value = Command> {
         5 => Just(Command::AddTrack),
         6 => (track.clone(), tick(), length())
             .prop_map(|(track, start, length)| Command::AddClip { track, start, length }),
-        4 => (id.clone(), track, tick())
+        4 => (id.clone(), track.clone(), tick())
             .prop_map(|(id, track, start)| Command::MoveClip { id, track, start }),
         4 => (id.clone(), tick()).prop_map(|(id, tick)| Command::SplitClip { id, tick }),
         2 => id.prop_map(|id| Command::DeleteClip { id }),
         3 => (tick(), us_per_quarter())
             .prop_map(|(tick, us_per_quarter)| Command::SetTempo { tick, us_per_quarter }),
-        3 => tick().prop_map(|tick| Command::RemoveTempo { tick }),
+        4 => tick().prop_map(|tick| Command::RemoveTempo { tick }),
         3 => (note_clip.clone(), note_start(), note_length(), pitch(), velocity()).prop_map(
             |(id, start, length, pitch, velocity)| Command::AddNote {
                 id,
@@ -341,6 +368,10 @@ fn command() -> impl Strategy<Value = Command> {
         ),
         2 => (note_clip, note_start(), pitch())
             .prop_map(|(id, start, pitch)| Command::RemoveNote { id, start, pitch }),
+        2 => (track.clone(), volume())
+            .prop_map(|(track, volume)| Command::SetTrackVolume { track, volume }),
+        2 => (track, any::<bool>())
+            .prop_map(|(track, muted)| Command::SetTrackMute { track, muted }),
     ]
 }
 
@@ -387,22 +418,36 @@ fn sample_rate() -> impl Strategy<Value = u64> {
 /// trace are otherwise empty, which leaves the order of events barely tested.
 fn notes_then_schedule() -> impl Strategy<Value = Vec<Request>> {
     let note = (note_start(), note_length(), pitch(), velocity());
-    (0u64..2, prop::collection::vec(note, 1..6), sample_rate()).prop_map(|(id, notes, rate)| {
-        let mut requests: Vec<Request> = notes
-            .into_iter()
-            .map(|(start, length, pitch, velocity)| {
-                Request::Edit(Edit::Apply(Command::AddNote {
-                    id,
-                    start,
-                    length,
-                    pitch,
-                    velocity,
-                }))
-            })
-            .collect();
-        requests.push(Request::Schedule(rate));
-        requests
-    })
+    let mute = prop::option::of(0u64..3);
+    (
+        0u64..2,
+        prop::collection::vec(note, 1..6),
+        mute,
+        sample_rate(),
+    )
+        .prop_map(|(id, notes, mute, rate)| {
+            let mut requests: Vec<Request> = notes
+                .into_iter()
+                .map(|(start, length, pitch, velocity)| {
+                    Request::Edit(Edit::Apply(Command::AddNote {
+                        id,
+                        start,
+                        length,
+                        pitch,
+                        velocity,
+                    }))
+                })
+                .collect();
+            // A muted track leaves its notes out of the schedule (ADR 20).
+            if let Some(track) = mute {
+                requests.push(Request::Edit(Edit::Apply(Command::SetTrackMute {
+                    track,
+                    muted: true,
+                })));
+            }
+            requests.push(Request::Schedule(rate));
+            requests
+        })
 }
 
 fn request() -> impl Strategy<Value = Request> {
@@ -484,6 +529,56 @@ fn core_agrees_with_model_on_boundaries() {
         })
     };
     let traces = [
+        // A volume may reach the maximum but not exceed it, also beyond u16;
+        // setting a track back to a new track's volume and mute matches one
+        // never changed; a muted track's notes leave the schedule.
+        vec![
+            apply(SetTrackVolume {
+                track: 0,
+                volume: 500,
+            }),
+            apply(AddTrack),
+            apply(SetTrackVolume {
+                track: 0,
+                volume: u64::from(MAX_VOLUME),
+            }),
+            apply(SetTrackVolume {
+                track: 0,
+                volume: u64::from(MAX_VOLUME) + 1,
+            }),
+            apply(SetTrackVolume {
+                track: 0,
+                volume: u64::from(u16::MAX) + 1 + 500,
+            }),
+            apply(SetTrackVolume {
+                track: 0,
+                volume: u64::from(UNITY_VOLUME),
+            }),
+            apply(SetTrackMute {
+                track: 1,
+                muted: true,
+            }),
+            add_clip(0, 960),
+            apply(AddNote {
+                id: 0,
+                start: 0,
+                length: 240,
+                pitch: 60,
+                velocity: 100,
+            }),
+            apply(SetTrackMute {
+                track: 0,
+                muted: true,
+            }),
+            Request::Schedule(48_000),
+            apply(SetTrackMute {
+                track: 0,
+                muted: false,
+            }),
+            Request::Schedule(48_000),
+            Request::Edit(Edit::Undo),
+            Request::Schedule(48_000),
+        ],
         // Clips that touch do not overlap; sharing one tick does.
         vec![
             apply(AddTrack),
