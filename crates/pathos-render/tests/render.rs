@@ -1,6 +1,6 @@
 //! The properties ADR 15 asks of the render: silence where no note sounds, an
 //! onset at the scheduled sample, and the same output on every run and
-//! platform.
+//! platform; and the track volume and mute of ADR 20.
 
 use std::num::NonZeroU32;
 
@@ -174,6 +174,43 @@ proptest! {
         for frame in 0..frames {
             prop_assert_eq!(both[frame].to_bits(), (a[frame] + b[frame]).to_bits(), "frame {}", frame);
         }
+    }
+}
+
+/// `project` with `command` applied, which must be accepted.
+fn with(project: Project, command: Command) -> Project {
+    project.apply(0, command).unwrap().0
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    /// A track at volume 500 plays at exactly half the level, and a track's
+    /// volume leaves the other track alone.
+    #[test]
+    fn a_track_plays_at_its_volume(a in note(), b in note(), rate in rate()) {
+        let a = NoteSpec { track: 0, ..a };
+        let b = NoteSpec { track: 1, ..b };
+        let frames = 4 * rate.get() as usize;
+        let full = project(&[a]);
+        let half = with(full.clone(), Command::SetTrackVolume { track: 0, volume: 500 });
+        let (full, half) = (render(&full, rate, frames), render(&half, rate, frames));
+        for frame in 0..frames {
+            prop_assert_eq!(half[frame].to_bits(), (full[frame] * 0.5).to_bits(), "frame {}", frame);
+        }
+        let both = project(&[a, b]);
+        let other = with(both.clone(), Command::SetTrackVolume { track: 0, volume: 0 });
+        prop_assert_eq!(render(&other, rate, frames), render(&project(&[b]), rate, frames));
+    }
+
+    /// A muted track is silent, whatever its volume.
+    #[test]
+    fn a_muted_track_is_silent(a in note(), volume in 0u64..=2000, rate in rate()) {
+        let a = NoteSpec { track: 0, ..a };
+        let frames = 4 * rate.get() as usize;
+        let loud = with(project(&[a]), Command::SetTrackVolume { track: 0, volume });
+        let muted = with(loud, Command::SetTrackMute { track: 0, muted: true });
+        prop_assert!(render(&muted, rate, frames).iter().all(|sample| *sample == 0.0));
     }
 }
 

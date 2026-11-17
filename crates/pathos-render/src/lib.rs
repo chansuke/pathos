@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 
-use pathos_core::{Event, Project};
+use pathos_core::{Event, Project, UNITY_VOLUME};
 
 pub mod wav;
 
@@ -36,7 +36,7 @@ const fn frequencies() -> [f32; 128] {
 }
 
 /// The first `frames` samples of the project at `sample_rate`, in one channel.
-/// Every track is added with the same weight until the project has a mixer.
+/// Each track is weighted by its volume (ADR 20).
 pub fn render(project: &Project, sample_rate: NonZeroU32, frames: usize) -> Vec<f32> {
     let mut out = vec![0.0; frames];
     Score::new(project, sample_rate).render(0, &mut out);
@@ -80,12 +80,16 @@ impl Score {
                 } => {
                     // Only the fraction of a cycle per frame matters.
                     let cycles = f64::from(FREQUENCIES[usize::from(pitch)]) / f64::from(rate);
+                    // A volume of 1000 is a gain of exactly 1, which leaves
+                    // the level as it was before tracks had a volume.
+                    let volume = project.track(track).map_or(UNITY_VOLUME, |t| t.volume);
+                    let gain = f32::from(volume) / f32::from(UNITY_VOLUME);
                     sounding.insert((track, pitch), notes.len());
                     notes.push(Sound {
                         on: sample,
                         off: sample,
                         step: cycles - (cycles as u64) as f64,
-                        level: f32::from(velocity) / 127.0,
+                        level: f32::from(velocity) / 127.0 * gain,
                     });
                 }
                 Event::Off {
