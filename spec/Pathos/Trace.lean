@@ -37,6 +37,9 @@ def Request.parse (line : String) : Option Request := do
     some (.edit (.apply (.setTrackVolume track volume)))
   | "mute-track", [track] => some (.edit (.apply (.setTrackMute track true)))
   | "unmute-track", [track] => some (.edit (.apply (.setTrackMute track false)))
+  | "solo-track", [track] => some (.edit (.apply (.setTrackSolo track true)))
+  | "unsolo-track", [track] => some (.edit (.apply (.setTrackSolo track false)))
+  | "set-track-pan", [track, pan] => some (.edit (.apply (.setTrackPan track pan)))
   | "undo", [] => some (.edit .undo)
   | "redo", [] => some (.edit .redo)
   | "micros", [tick] => some (.micros tick)
@@ -59,6 +62,7 @@ def Error.name : Error → String
   | .noteOverlap => "note-overlap"
   | .unknownNote => "unknown-note"
   | .invalidVolume => "invalid-volume"
+  | .invalidPan => "invalid-pan"
   | .nothingToUndo => "nothing-to-undo"
   | .nothingToRedo => "nothing-to-redo"
 
@@ -68,7 +72,8 @@ def History.render (h : History) : String :=
   let clips := p.clips.map fun c =>
     let notes := c.notes.map fun n => s!"{n.start}/{n.length}/{n.pitch}/{n.velocity}"
     s!"{c.id}:{c.track}:{c.start}:{c.length}[{";".intercalate notes}]"
-  let tracks := p.tracks.map fun t => s!"{t.volume}{if t.muted then "m" else ""}"
+  let tracks := p.tracks.map fun t =>
+    s!"{t.volume}:{t.pan}{if t.muted then "m" else ""}{if t.solo then "s" else ""}"
   s!"tracks={",".intercalate tracks} next={h.nextClipId} tempo={",".intercalate tempo} "
     ++ s!"clips={",".intercalate clips} undo={h.past.length} redo={h.future.length}"
 

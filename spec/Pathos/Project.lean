@@ -32,11 +32,19 @@ def maxVolume : Nat := 2000
 /-- The volume of a new track, a gain of 1. -/
 def unityVolume : Nat := 1000
 
+/-- The rightmost pan; 0 is leftmost (ADR 21). -/
+def maxPan : Nat := 200
+
+/-- The pan of a new track. -/
+def centerPan : Nat := 100
+
 /-- A track's volume is its gain in thousandths (ADR 20). A muted track is not
-heard. -/
+heard, and when any track is soloed, only soloed tracks are (ADR 21). -/
 structure Track where
   volume : Nat := unityVolume
   muted : Bool := false
+  solo : Bool := false
+  pan : Nat := centerPan
   deriving Repr, DecidableEq
 
 /-- From `tick` onwards a quarter note lasts `usPerQuarter` microseconds. -/
@@ -113,6 +121,8 @@ inductive Command where
   | removeNote (id : Nat) (start : Tick) (pitch : Nat)
   | setTrackVolume (track : Nat) (volume : Nat)
   | setTrackMute (track : Nat) (muted : Bool)
+  | setTrackSolo (track : Nat) (solo : Bool)
+  | setTrackPan (track : Nat) (pan : Nat)
   deriving Repr, DecidableEq
 
 inductive Error where
@@ -131,6 +141,7 @@ inductive Error where
   | noteOverlap
   | unknownNote
   | invalidVolume
+  | invalidPan
   | nothingToUndo
   | nothingToRedo
   deriving Repr, DecidableEq
@@ -228,6 +239,13 @@ def step (p : Project) (nextClipId : Nat) : Command → Except Error (Project ×
   | .setTrackMute track muted => do
     let some t := p.tracks[track]? | throw .unknownTrack
     pure ({ p with tracks := p.tracks.set track { t with muted } }, nextClipId)
+  | .setTrackSolo track solo => do
+    let some t := p.tracks[track]? | throw .unknownTrack
+    pure ({ p with tracks := p.tracks.set track { t with solo } }, nextClipId)
+  | .setTrackPan track pan => do
+    let some t := p.tracks[track]? | throw .unknownTrack
+    if pan > maxPan then throw .invalidPan
+    pure ({ p with tracks := p.tracks.set track { t with pan } }, nextClipId)
 
 /-- `ppq` times the microseconds from the first tempo change to `tick`. -/
 def microsTimesPpq : List TempoChange → Tick → Nat
@@ -287,9 +305,9 @@ where
     | [_] => true
     | current :: next :: rest => current.id < next.id && ordered (next :: rest)
 
-/-- Every track's volume is in range. -/
+/-- Every track's volume and pan are in range. -/
 def tracksWellFormed (p : Project) : Bool :=
-  p.tracks.all (·.volume ≤ maxVolume)
+  p.tracks.all fun t => t.volume ≤ maxVolume && t.pan ≤ maxPan
 
 /-- `p` is well-formed when the next created clip receives `nextClipId`. -/
 def Project.wellFormed (p : Project) (nextClipId : Nat) : Bool :=

@@ -4,8 +4,10 @@ Pathos.microsTimesPpq_monotone [proved] : ∀ (tempo : List Pathos.TempoChange) 
 Pathos.redo_undo [proved] : ∀ (h h' : Pathos.History), h.edit Pathos.Edit.undo = Except.ok h' → h'.edit Pathos.Edit.redo = Except.ok h
 Pathos.replaceClip_ids [proved] : ∀ (p : Pathos.Project) (c x : Pathos.Clip), x ∈ p.replaceClip c → x.id ∈ List.map (fun x => x.id) p.clips
 Pathos.sampleOf_monotone [proved] : ∀ (p : Pathos.Project) (rate : Nat) (a b : Pathos.Tick), a ≤ b → p.sampleOf rate a ≤ p.sampleOf rate b
+Pathos.schedule_heard [proved] : ∀ (p : Pathos.Project) (rate : Nat) (e : Pathos.Event), e ∈ p.schedule rate → p.heard e.track = true
 Pathos.schedule_muted_silent [proved] : ∀ (p : Pathos.Project) (rate : Nat) (e : Pathos.Event), e ∈ p.schedule rate → p.muted e.track = false
 Pathos.schedule_ordered [proved] : ∀ (p : Pathos.Project) (rate : Nat), List.Pairwise (fun a b => a.le b = true) (p.schedule rate)
+Pathos.schedule_solo [proved] : ∀ (p : Pathos.Project) (rate : Nat) (e : Pathos.Event), (p.tracks.any fun x => x.solo) = true → e ∈ p.schedule rate → p.soloed e.track = true
 Pathos.splitClip_keeps_onsets [proved] : ∀ (p q : Pathos.Project) (n n' id tick : Nat) (clip : Pathos.Clip) (note : Pathos.Note), p.findClip id = some clip → note ∈ clip.notes → Pathos.step p n (Pathos.Command.splitClip id tick) = Except.ok (q, n') → ∃ c, c ∈ q.clips ∧ ∃ m, m ∈ c.notes ∧ c.start + m.start = clip.start + note.start ∧ m.pitch = note.pitch ∧ m.velocity = note.velocity
 Pathos.step_new_clip_ids [proved] : ∀ (p q : Pathos.Project) (n n' : Nat) (c : Pathos.Command), Pathos.step p n c = Except.ok (q, n') → ∀ (clip : Pathos.Clip), clip ∈ q.clips → ¬clip.id ∈ List.map (fun x => x.id) p.clips → n ≤ clip.id ∧ clip.id < n'
 Pathos.step_nextClipId_le [proved] : ∀ (p q : Pathos.Project) (n n' : Nat) (c : Pathos.Command), Pathos.step p n c = Except.ok (q, n') → n ≤ n'
