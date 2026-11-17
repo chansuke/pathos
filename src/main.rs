@@ -31,6 +31,7 @@ const TEXT: u32 = 0xd0d0d0;
 const ERROR: u32 = 0xe06c75;
 const PLAYHEAD: u32 = 0xf0f0f0;
 const MUTED: u32 = 0xd19a66;
+const SOLOED: u32 = 0x98c379;
 
 const HINT: &str = "T: track · Double-click a lane: clip · Drag: move · S: split · Delete: delete · \
                     Click the roll: note · Ctrl-Z / Ctrl-Shift-Z: undo / redo · Space: play · \
@@ -58,12 +59,12 @@ struct Pathos {
 
 impl Pathos {
     fn handle(&mut self, input: Input, cx: &mut Context<Self>) {
-        let heard = self.editor.dragged_volume();
+        let heard = self.editor.pending();
         if self.editor.handle(input) {
             self.notice = None;
             self.publish();
-        } else if self.editor.dragged_volume() != heard {
-            // A dragged volume changed or was let go without an edit.
+        } else if self.editor.pending() != heard {
+            // A dragged volume or pan changed, or was let go without an edit.
             self.publish();
         }
         cx.notify();
@@ -310,7 +311,7 @@ impl Render for Pathos {
             )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
                 let (x, y) = (f32::from(event.position.x), f32::from(event.position.y));
-                if this.editor.dragged_volume().is_some() {
+                if this.editor.pending().is_some() {
                     this.handle(Input::Move { x, y }, cx);
                 } else {
                     this.editor.handle(Input::Move { x, y });
@@ -358,29 +359,40 @@ fn lanes(editor: &Editor, width: f32) -> Vec<Div> {
     let mut elements = Vec::new();
     for track in 0..project.track_count() {
         let top = layout::lane_top(track);
-        let muted = project.track(track).is_some_and(|track| track.muted);
+        let settings = project.track(track).unwrap_or_default();
         elements.push(
             at(Rect {
                 x: 0.0,
                 y: top + 4.0,
-                width: HEADER_WIDTH,
+                width: layout::pan_rect(track).x,
                 height: 18.0,
             })
             .px_2()
             .child(format!("Track {}", track + 1)),
         );
-        let mute = at(layout::mute_rect(track))
-            .flex()
-            .items_center()
-            .justify_center()
-            .border_1()
-            .border_color(rgb(GRID))
-            .child("M");
-        elements.push(if muted {
-            mute.bg(rgb(MUTED)).text_color(rgb(BACKGROUND))
-        } else {
-            mute
-        });
+        elements.push(
+            at(layout::pan_rect(track))
+                .flex()
+                .items_center()
+                .justify_end()
+                .child(editor::pan_label(editor.pan(track))),
+        );
+        let button = |rect, label: &'static str, on: bool, color: u32| {
+            let button = at(rect)
+                .flex()
+                .items_center()
+                .justify_center()
+                .border_1()
+                .border_color(rgb(GRID))
+                .child(label);
+            if on {
+                button.bg(rgb(color)).text_color(rgb(BACKGROUND))
+            } else {
+                button
+            }
+        };
+        elements.push(button(layout::mute_rect(track), "M", settings.muted, MUTED));
+        elements.push(button(layout::solo_rect(track), "S", settings.solo, SOLOED));
         elements.push(
             at(layout::volume_rect(track))
                 .flex()

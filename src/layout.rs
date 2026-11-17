@@ -10,7 +10,7 @@ use pathos_core::{Clip, MAX_TICK, Note, PPQ, Project, Tick};
 pub const STATUS_HEIGHT: f32 = 28.0;
 /// The width of the track names left of the timeline and of the pitch names
 /// left of the piano roll.
-pub const HEADER_WIDTH: f32 = 72.0;
+pub const HEADER_WIDTH: f32 = 112.0;
 pub const LANE_HEIGHT: f32 = 48.0;
 pub const BEAT_WIDTH: f32 = 32.0;
 /// The gap between the last lane and the piano roll.
@@ -63,6 +63,14 @@ pub enum Hit {
     Mute {
         track: u64,
     },
+    /// The solo button in the header of a track.
+    Solo {
+        track: u64,
+    },
+    /// The pan in the header of a track.
+    Pan {
+        track: u64,
+    },
     /// The volume in the header of a track.
     Volume {
         track: u64,
@@ -84,13 +92,31 @@ pub fn mute_rect(track: u64) -> Rect {
     }
 }
 
-/// The volume of a track, right of its mute button.
-pub fn volume_rect(track: u64) -> Rect {
+/// The solo button of a track, right of its mute button.
+pub fn solo_rect(track: u64) -> Rect {
     Rect {
         x: 26.0,
+        ..mute_rect(track)
+    }
+}
+
+/// The volume of a track, right of its solo button.
+pub fn volume_rect(track: u64) -> Rect {
+    Rect {
+        x: 46.0,
         y: lane_top(track) + 26.0,
-        width: HEADER_WIDTH - 28.0,
+        width: HEADER_WIDTH - 48.0,
         height: 16.0,
+    }
+}
+
+/// The pan of a track, right of its name.
+pub fn pan_rect(track: u64) -> Rect {
+    Rect {
+        x: HEADER_WIDTH - 42.0,
+        y: lane_top(track) + 4.0,
+        width: 40.0,
+        height: 18.0,
     }
 }
 
@@ -154,6 +180,8 @@ pub fn hit(project: &Project, selected: Option<u64>, x: f32, y: f32) -> Hit {
     if x < HEADER_WIDTH {
         return match track_at(project, y) {
             Some(track) if mute_rect(track).contains(x, y) => Hit::Mute { track },
+            Some(track) if solo_rect(track).contains(x, y) => Hit::Solo { track },
+            Some(track) if pan_rect(track).contains(x, y) => Hit::Pan { track },
             Some(track) if volume_rect(track).contains(x, y) => Hit::Volume { track },
             _ => Hit::Nothing,
         };
@@ -278,6 +306,20 @@ mod tests {
         for track in 0..project.track_count() {
             let (x, y) = center(mute_rect(track));
             assert_eq!(hit(&project, None, x, y), Hit::Mute { track });
+            let (x, y) = center(solo_rect(track));
+            assert_eq!(hit(&project, None, x, y), Hit::Solo { track });
+            let (x, y) = center(pan_rect(track));
+            assert_eq!(hit(&project, None, x, y), Hit::Pan { track });
+            let pan = pan_rect(track);
+            assert_eq!(
+                hit(&project, None, HEADER_WIDTH - 3.0, pan.y),
+                Hit::Pan { track }
+            );
+            assert_eq!(
+                hit(&project, None, pan.x - 1.0, pan.y),
+                Hit::Nothing,
+                "the name"
+            );
             let (x, y) = center(volume_rect(track));
             assert_eq!(hit(&project, None, x, y), Hit::Volume { track });
             // The volume reaches almost to the timeline; its first pixel is
