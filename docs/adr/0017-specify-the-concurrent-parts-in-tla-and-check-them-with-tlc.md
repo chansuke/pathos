@@ -136,7 +136,11 @@ with one worker:
 * tla-ts took 1.1 seconds and 0.2 GB at 15 snapshots, TLC 2.3 seconds and
   0.5 GB, including the start of the JVM.
 * At 40 snapshots, tla-ts ran for 9 minutes, used 6.6 GB and stopped without
-  a result; why is not known yet.
+  a result. It had run out of memory: tla-ts keeps every state in the Node.js
+  heap, and Node.js stopped it at the default limit of 4.3 GB after 9.3
+  million states. With a limit of 28 GB it went on past 20 million states, so
+  this bound is too large for both tools, not a fault of tla-ts. To check such
+  a bound, raise the limit with `node --max-old-space-size`.
 
 References:
 
