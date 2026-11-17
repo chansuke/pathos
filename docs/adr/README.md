@@ -16,3 +16,4 @@
 * [16. Leave splitting a clip with notes out of the Kani harnesses](0016-leave-splitting-a-clip-with-notes-out-of-the-kani-harnesses.md)
 * [17. Specify the concurrent parts in TLA+ and check them with TLC](0017-specify-the-concurrent-parts-in-tla-and-check-them-with-tlc.md)
 * [18. Play back in real time from snapshots handed to the audio thread](0018-play-back-in-real-time-from-snapshots-handed-to-the-audio-thread.md)
+* [19. Save a project as the edits that built it](0019-save-a-project-as-the-edits-that-built-it.md)
