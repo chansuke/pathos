@@ -1,7 +1,7 @@
 ---
 number: 20
 title: Give each track a volume and a mute
-status: proposed
+status: accepted
 date: 2026-11-17
 ---
 
