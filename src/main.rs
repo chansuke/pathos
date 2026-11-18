@@ -1,9 +1,11 @@
 mod editor;
 mod file;
 mod layout;
+mod meter;
 
 use std::ops::Range;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use gpui::{
     App, Application, Bounds, Context, Div, FocusHandle, KeyDownEvent, MouseButton, MouseDownEvent,
@@ -20,6 +22,7 @@ use layout::{
     BEAT_WIDTH, Fader, HEADER_WIDTH, HIGHEST_PITCH, LANE_HEIGHT, LOWEST_PITCH, ROLL_BEAT_WIDTH,
     ROW_HEIGHT, Rect, STATUS_HEIGHT,
 };
+use meter::Meter;
 
 const BACKGROUND: u32 = 0x1e1e1e;
 const LANE: u32 = 0x262626;
@@ -63,6 +66,9 @@ struct Pathos {
     looping: Option<Range<Tick>>,
     /// Whether playback clicks on every beat (ADR 23).
     metronome: bool,
+    meter: Meter,
+    /// When the meter last took the peaks of the audio thread.
+    metered: Option<Instant>,
 }
 
 impl Pathos {
@@ -292,6 +298,16 @@ impl Render for Pathos {
                 .child(format!("No audio output: {error}")),
             (None, None, Ok(_)) => div().child(HINT),
         };
+        if let Ok(output) = &self.output {
+            let now = Instant::now();
+            let elapsed = self.metered.map_or(Duration::ZERO, |then| now - then);
+            self.metered = Some(now);
+            self.meter.update(output.transport().take_peaks(), elapsed);
+            // Keep drawing until the meter has fallen back after playback.
+            if !self.meter.is_empty() {
+                window.request_animation_frame();
+            }
+        }
         let playhead = self.output.as_ref().ok().map(|output| {
             output.collect();
             let transport = output.transport();
@@ -380,6 +396,21 @@ impl Render for Pathos {
                     .items_center()
                     .justify_end()
                     .child(editor::volume_label(self.editor.volume(Fader::Master))),
+            )
+            .children(
+                self.meter
+                    .levels()
+                    .into_iter()
+                    .enumerate()
+                    .flat_map(|(channel, level)| {
+                        let rect = layout::meter_rect(channel);
+                        let color = if meter::clips(level) { ERROR } else { SOLOED };
+                        let filled = Rect {
+                            width: rect.width * meter::fraction(level),
+                            ..rect
+                        };
+                        [at(rect).bg(rgb(GRID)), at(filled).bg(rgb(color))]
+                    }),
             )
             .child(
                 at(Rect {
@@ -635,6 +666,8 @@ fn main() {
                         asking_to_close: false,
                         looping: None,
                         metronome: false,
+                        meter: Meter::default(),
+                        metered: None,
                     };
                     // A file named on the command line is opened, or created
                     // by the first save if it does not exist yet.

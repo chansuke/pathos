@@ -246,3 +246,48 @@ fn an_empty_range_does_not_loop() {
     );
     assert_eq!(Score::new(&project(60), RATE).looped_frames(), None);
 }
+
+/// The loudest sample of each channel of `frames`.
+fn peaks(frames: &[Frame]) -> Frame {
+    frames.iter().fold([0.0; 2], |[left, right], frame| {
+        [left.max(frame[0].abs()), right.max(frame[1].abs())]
+    })
+}
+
+/// The meter reports the loudest sample of each channel played since it was
+/// last read, and nothing once read (ADR 25).
+#[test]
+fn the_meter_reports_the_peak_of_each_channel_since_it_was_read() {
+    let project = project(60)
+        .apply(0, Command::SetTrackPan { track: 0, pan: 150 })
+        .unwrap()
+        .0;
+    let whole = render(&project, RATE, 6000);
+    let (publisher, transport, mut engine) = engine();
+    publisher.publish(Score::new(&project, RATE));
+    assert_eq!(transport.take_peaks(), [0.0; 2], "before playback");
+    transport.play();
+    play(&mut engine, 3000, 100);
+    let first = transport.take_peaks();
+    assert_eq!(first, peaks(&whole[..3000]));
+    assert!(first[0] < first[1], "panned right");
+    assert_eq!(transport.take_peaks(), [0.0; 2], "once read");
+    // The first beat's note ends at frame 2000, so these blocks are silent.
+    play(&mut engine, 1000, 100);
+    let silence = transport.take_peaks();
+    assert_eq!(silence, peaks(&whole[3000..4000]));
+    play(&mut engine, 2000, 5000);
+    assert_eq!(transport.take_peaks(), peaks(&whole[4000..6000]));
+}
+
+/// The meter shows the song: the metronome's clicks do not move it.
+#[test]
+fn the_meter_leaves_out_the_metronome() {
+    let project = History::default().present().clone();
+    let (publisher, transport, mut engine) = engine();
+    publisher.publish(Score::new(&project, RATE).with_metronome());
+    transport.play();
+    let played = play(&mut engine, 1000, 100);
+    assert!(peaks(&played)[0] > 0.0, "a click sounds");
+    assert_eq!(transport.take_peaks(), [0.0; 2]);
+}
