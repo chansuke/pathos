@@ -30,9 +30,16 @@ const HEADER_PADDING: f32 = 12.0;
 /// The height of a row of controls in a track header.
 const CONTROL_HEIGHT: f32 = 22.0;
 pub const BEAT_WIDTH: f32 = 32.0;
-/// The gap between the last lane and the piano roll.
-pub const ROLL_GAP: f32 = 16.0;
-pub const ROW_HEIGHT: f32 = 8.0;
+/// The row between the last lane and the piano roll that names the clip and
+/// numbers its beats (ADR 28).
+pub const ROLL_RULER_HEIGHT: f32 = 24.0;
+pub const ROW_HEIGHT: f32 = 7.0;
+/// The width of the keyboard left of the piano roll, at the right of the
+/// header column.
+pub const KEYBOARD_WIDTH: f32 = 72.0;
+/// The size the window opens at.
+pub const WINDOW_WIDTH: f32 = 1200.0;
+pub const WINDOW_HEIGHT: f32 = 800.0;
 pub const ROLL_BEAT_WIDTH: f32 = 96.0;
 /// The piano roll shows C2 to C6.
 pub const LOWEST_PITCH: u8 = 36;
@@ -261,7 +268,7 @@ pub fn clip_rect(clip: &Clip) -> Rect {
 }
 
 pub fn roll_top(project: &Project) -> f32 {
-    lane_top(project.track_count()) + ROLL_GAP
+    lane_top(project.track_count()) + ROLL_RULER_HEIGHT
 }
 
 pub fn row_top(project: &Project, pitch: u8) -> f32 {
@@ -636,8 +643,8 @@ mod tests {
     fn the_roll_lies_below_the_lanes_and_spans_the_clip_and_its_pitches() {
         let project = project();
         let clip = project.clips()[0];
-        // The roll starts a gap below the last lane.
-        let (left, top) = (HEADER_WIDTH, lane_top(2) + ROLL_GAP);
+        // The roll starts under its ruler, below the last lane.
+        let (left, top) = (HEADER_WIDTH, lane_top(2) + ROLL_RULER_HEIGHT);
         let (right, bottom) = (left + roll_width(&clip), top + roll_height());
         let inside = |x, y| !matches!(hit(&project, Some(0), x, y), Hit::Nothing);
         assert!(inside(left, top));
@@ -647,6 +654,16 @@ mod tests {
         assert!(!inside(right, top));
         assert_eq!(row_top(&project, HIGHEST_PITCH), top);
         assert_eq!(row_top(&project, LOWEST_PITCH) + ROW_HEIGHT, bottom);
+    }
+
+    #[test]
+    fn with_four_tracks_the_roll_fits_above_the_footer_of_a_new_window() {
+        let mut history = History::default();
+        for _ in 0..4 {
+            history.edit(Edit::Apply(Command::AddTrack)).unwrap();
+        }
+        let bottom = roll_top(history.present()) + roll_height();
+        assert!(bottom <= WINDOW_HEIGHT - FOOTER_HEIGHT, "{bottom}");
     }
 
     #[test]

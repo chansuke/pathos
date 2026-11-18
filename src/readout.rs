@@ -16,6 +16,13 @@ pub fn position_label(tick: Tick) -> String {
     format!("{bar}.{beat}.{sixteenth}")
 }
 
+/// The beat that `tick` lies in as bar and beat, each counted from 1: "3.2".
+pub fn beat_label(tick: Tick) -> String {
+    let bar = tick / (BEATS_PER_BAR * PPQ) + 1;
+    let beat = tick / PPQ % BEATS_PER_BAR + 1;
+    format!("{bar}.{beat}")
+}
+
 /// The time of `frame` at `sample_rate` in minutes, seconds and milliseconds,
 /// rounded down: "0:04.500".
 pub fn time_label(frame: u64, sample_rate: NonZeroU32) -> String {
@@ -51,6 +58,15 @@ mod tests {
         assert_eq!(position_label(4 * PPQ + PPQ + PPQ / 2), "2.2.3");
         assert_eq!(position_label(12 * PPQ - 1), "3.4.4");
         assert_eq!(position_label(12 * PPQ), "4.1.1");
+    }
+
+    #[test]
+    fn a_beat_counts_bars_and_beats_from_one() {
+        assert_eq!(beat_label(0), "1.1");
+        assert_eq!(beat_label(PPQ - 1), "1.1");
+        assert_eq!(beat_label(PPQ), "1.2");
+        assert_eq!(beat_label(4 * PPQ - 1), "1.4");
+        assert_eq!(beat_label(5 * PPQ), "2.2");
     }
 
     #[test]
