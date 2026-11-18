@@ -1,0 +1,45 @@
+# Usage
+
+The window shows a timeline of tracks and MIDI clips and a piano roll for the
+selected clip. Use `Cmd` instead of `Ctrl` on macOS.
+
+## Editing
+
+- `T` adds a track, and a double click on a lane adds a one-bar clip.
+- Dragging a clip moves it by whole beats, also to another track.
+- `S` splits the selected clip at the beat under the pointer, and `Delete`
+  deletes it.
+- A click in the piano roll adds a sixteenth note, and a click on a note
+  removes it.
+- `Ctrl-Z` and `Ctrl-Shift-Z` undo and redo.
+
+## Mixing
+
+- `M` in a track's header mutes it and `S` solos it.
+- Dragging the volume up or down changes it by a quarter decibel a pixel, and
+  dragging the pan (`C`, `L` or `R`) left or right moves the track between the
+  channels. A double click returns either to its default. Both are heard while
+  they are dragged.
+- `Master` at the left of the status row is the volume of the whole song,
+  dragged and reset like a track's volume. It does not change the metronome.
+- The two bars under it meter the left and right channel of the song during
+  playback, from -60 dB to +6 dB, and turn red past full scale.
+
+## Playback
+
+- `Space` plays and stops, and `Home` returns to the start. Playback matches
+  the offline render sample for sample.
+- `L` loops the selected clip, or every clip when none is selected, and stops
+  looping when a loop is on. The loop is not saved in the project.
+- `K` turns the metronome on and off. It clicks on every beat during playback,
+  higher on the first beat of each bar, and is not in a rendered file.
+
+## Files
+
+- `Ctrl-S` saves and `Ctrl-Shift-S` saves under a new name; `Ctrl-O` opens a
+  file.
+- `cargo run -- song.pathos` opens `song.pathos`, or creates it on the first
+  save.
+- A project file lists the edits that built the project, one per line, so undo
+  still works after reopening it.
+- Closing the window with unsaved changes asks whether to save them first.
