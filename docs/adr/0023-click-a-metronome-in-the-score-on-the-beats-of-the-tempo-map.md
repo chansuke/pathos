@@ -37,9 +37,10 @@ they are.
 
 The window holds whether the metronome is on, and `K` turns it on and off. A
 score built for playback with the metronome on keeps the project's tempo
-changes and clicks on every beat: on each tick that is a multiple of a quarter
+changes, each with the time at which it starts, and clicks on every beat: on each tick that is a multiple of a quarter
 note, up to the last tick a clip may reach. A beat's frame is computed as the
-schedule computes the frame of a tick (ADR 15). A click is a triangle wave of
+schedule computes the frame of a tick (ADR 15), and the schedule uses the same
+tempo changes with their times, so the differential tests check them. A click is a triangle wave of
 20 ms at half the level of a note at full velocity, an A6 on the first beat of
 each bar of four beats, as the window draws bars, and an A5 on the other
 beats. A beat cuts the click of the beat before it, so clicks never add up. The
@@ -47,8 +48,9 @@ clicks are added to the notes after them, so a frame's notes have the same
 bits with the metronome on or off.
 
 To find the beat at a frame, the score bisects the beats by their frames, which
-are in order. Each block turns once for every beat that starts in it, plus
-one, and never more often than it has frames, however fast the tempo.
+are in order, and finds each frame by a search of the tempo changes. Each block
+turns once for every frame on which a beat starts, plus one, and never more
+often than it has frames, however fast the tempo or many the tempo changes.
 
 The metronome is not part of the project: it is not undone, not saved, not in
 a rendered file, and the model does not specify it.
@@ -61,8 +63,10 @@ a rendered file, and the model does not specify it.
   not change.
 * Bad, because every bar has four beats until a project has a meter.
 * Bad, because each beat in a block takes a bisection of about thirty steps,
-  each through the tempo changes, which costs more than a list of frames
-  would.
+  each with a search of the tempo changes, which costs more than a list of
+  frames would.
+* Bad, because a loop whose start is not on a beat resumes within a click, and
+  one whose end is not on a beat cuts a click, as ADR 22 cuts notes.
 * Neutral, because a count-in, the click's level and sound, and saving the
   metronome are left to later decisions.
 
