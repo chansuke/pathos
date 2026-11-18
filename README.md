@@ -22,6 +22,9 @@ piano roll for the selected clip:
   offline render of ADR 15, sample for sample.
 - `L` loops the selected clip, or every clip when none is selected, and stops
   looping when a loop is on. The loop is not part of the project (ADR 22).
+- `K` turns the metronome on and off. It clicks on every beat during playback,
+  higher on the first beat of each bar, and is not in a rendered file
+  (ADR 23).
 - `Ctrl-S` saves and `Ctrl-Shift-S` saves under a new name; `Ctrl-O` opens a
   file. `cargo run -- song.pathos` opens `song.pathos`, or creates it on the
   first save. A project file lists the edits that built the project, one per
