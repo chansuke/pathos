@@ -39,7 +39,7 @@ const LOOP_BAR: u32 = 0x61afef;
 
 const HINT: &str = "T: track · Double-click a lane: clip · Drag: move · S: split · Delete: delete · \
                     Click the roll: note · Ctrl-Z / Ctrl-Shift-Z: undo / redo · Space: play · \
-                    Home: start · L: loop · Ctrl-S: save · Ctrl-O: open";
+                    Home: start · L: loop · K: metronome · Ctrl-S: save · Ctrl-O: open";
 
 /// The outcome of the last save or open, shown until the next accepted edit.
 enum Notice {
@@ -61,6 +61,8 @@ struct Pathos {
     asking_to_close: bool,
     /// The ticks that playback repeats, if any (ADR 22).
     looping: Option<Range<Tick>>,
+    /// Whether playback clicks on every beat (ADR 23).
+    metronome: bool,
 }
 
 impl Pathos {
@@ -229,10 +231,14 @@ impl Pathos {
     fn publish(&self) {
         if let Ok(output) = &self.output {
             let (heard, rate) = (self.editor.heard(), output.sample_rate());
-            output.publish(match &self.looping {
-                Some(ticks) => Score::looped(&heard, rate, ticks.clone()),
-                None => Score::new(&heard, rate),
-            });
+            let mut score = Score::new(&heard, rate);
+            if let Some(ticks) = &self.looping {
+                score = score.looped(ticks.clone());
+            }
+            if self.metronome {
+                score = score.with_metronome();
+            }
+            output.publish(score);
         }
     }
 
@@ -317,6 +323,12 @@ impl Render for Pathos {
                     this.toggle_loop(cx);
                     return;
                 }
+                if event.keystroke.key == "k" && !modifiers.secondary() {
+                    this.metronome = !this.metronome;
+                    this.publish();
+                    cx.notify();
+                    return;
+                }
                 if let Some(key) = key(event) {
                     this.handle(Input::Key(key), cx);
                 }
@@ -359,7 +371,11 @@ impl Render for Pathos {
                 })
                 .flex()
                 .items_center()
-                .child(status),
+                .child(status)
+                .children(
+                    self.metronome
+                        .then(|| div().ml_auto().text_color(rgb(LOOP_BAR)).child("Metronome")),
+                ),
             )
             .children(lanes(&self.editor, width))
             .children(project.clips().iter().map(|clip| {
@@ -599,6 +615,7 @@ fn main() {
                         title: String::new(),
                         asking_to_close: false,
                         looping: None,
+                        metronome: false,
                     };
                     // A file named on the command line is opened, or created
                     // by the first save if it does not exist yet.

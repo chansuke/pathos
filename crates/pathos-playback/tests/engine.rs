@@ -194,7 +194,7 @@ fn play_score(score: Score, from: u64, frames: usize, block: usize) -> Vec<Frame
 fn a_loop_repeats_its_frames() {
     let project = project(60);
     // Beats 1 and 2: at 120 BPM and 8000 Hz, frames 4000 up to 12000.
-    let score = || Score::looped(&project, RATE, PPQ..3 * PPQ);
+    let score = || Score::new(&project, RATE).looped(PPQ..3 * PPQ);
     assert_eq!(score().looped_frames(), Some(4000..12_000));
     let whole = render(&project, RATE, 13_000);
     let mut expected = whole[..12_000].to_vec();
@@ -220,7 +220,7 @@ fn playback_after_a_loop_runs_on_and_the_playhead_returns_within_it() {
     let project = project(60);
     let whole = render(&project, RATE, 20_000);
     let played = play_score(
-        Score::looped(&project, RATE, PPQ..3 * PPQ),
+        Score::new(&project, RATE).looped(PPQ..3 * PPQ),
         12_000,
         8000,
         100,
@@ -228,7 +228,7 @@ fn playback_after_a_loop_runs_on_and_the_playhead_returns_within_it() {
     assert_eq!(bits(&played), bits(&whole[12_000..20_000]));
 
     let (publisher, transport, mut engine) = engine();
-    publisher.publish(Score::looped(&project, RATE, PPQ..3 * PPQ));
+    publisher.publish(Score::new(&project, RATE).looped(PPQ..3 * PPQ));
     transport.seek(11_000);
     transport.play();
     play(&mut engine, 1500, 1500);
@@ -239,7 +239,9 @@ fn playback_after_a_loop_runs_on_and_the_playhead_returns_within_it() {
 #[test]
 fn an_empty_range_does_not_loop() {
     assert_eq!(
-        Score::looped(&project(60), RATE, PPQ..PPQ).looped_frames(),
+        Score::new(&project(60), RATE)
+            .looped(PPQ..PPQ)
+            .looped_frames(),
         None
     );
     assert_eq!(Score::new(&project(60), RATE).looped_frames(), None);

@@ -90,11 +90,14 @@ fn filling_blocks_neither_allocates_nor_frees() {
     transport.play();
 
     for edit in 0..4 {
-        // The last score loops a beat, which the blocks below cross.
+        // The last score loops a beat, which the blocks below cross, and
+        // clicks on the beats.
         let score = if edit < 3 {
             Score::new(history.present(), rate)
         } else {
-            Score::looped(history.present(), rate, 0..PPQ)
+            Score::new(history.present(), rate)
+                .looped(0..PPQ)
+                .with_metronome()
         };
         publisher.publish(score);
         publisher.collect();

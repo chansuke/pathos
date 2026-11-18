@@ -10,7 +10,9 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::ops::Range;
 
-use pathos_core::{CENTER_PAN, Event, MAX_PAN, Project, Tick, Track, UNITY_VOLUME};
+use pathos_core::{
+    CENTER_PAN, Event, MAX_PAN, MAX_TICK, PPQ, Project, TempoMap, Tick, Track, UNITY_VOLUME,
+};
 
 pub mod wav;
 
@@ -36,6 +38,20 @@ const fn frequencies() -> [f32; 128] {
     table
 }
 
+/// The beats in a bar, as the window draws them, until a project has a meter.
+const BEATS_PER_BAR: u64 = 4;
+
+/// The last beat that can click: beats lie on the ticks a clip may reach.
+const LAST_BEAT: u64 = MAX_TICK / PPQ;
+
+/// The pitches of the metronome's click on the first beat of a bar and on the
+/// other beats: A6 and A5.
+const DOWNBEAT_PITCH: usize = 93;
+const BEAT_PITCH: usize = 81;
+
+/// The level of a click, below a note at full velocity.
+const CLICK_LEVEL: f32 = 0.5;
+
 /// One sample of the left and of the right channel (ADR 21).
 pub type Frame = [f32; 2];
 
@@ -59,6 +75,11 @@ pub struct Score {
     notes: Vec<Sound>,
     /// The frames that playback repeats, if any (ADR 22).
     looped: Option<Range<u64>>,
+    /// The project's tempo changes, which place the beats.
+    tempo: TempoMap,
+    rate: u32,
+    /// Whether a click sounds on every beat (ADR 23).
+    metronome: bool,
 }
 
 /// A note as the instrument plays it: from frame `on` up to `off`.
@@ -84,6 +105,13 @@ fn gains(track: Track) -> Frame {
     [volume * left, volume * right]
 }
 
+/// The fraction of a cycle that `pitch` advances each frame at `rate`: only
+/// the fraction matters.
+fn step(pitch: usize, rate: u32) -> f64 {
+    let cycles = f64::from(FREQUENCIES[pitch]) / f64::from(rate);
+    cycles - (cycles as u64) as f64
+}
+
 impl Score {
     pub fn new(project: &Project, sample_rate: NonZeroU32) -> Self {
         let rate = sample_rate.get();
@@ -97,15 +125,13 @@ impl Score {
                     pitch,
                     velocity,
                 } => {
-                    // Only the fraction of a cycle per frame matters.
-                    let cycles = f64::from(FREQUENCIES[usize::from(pitch)]) / f64::from(rate);
                     let [left, right] = gains(project.track(track).unwrap_or_default());
                     let level = f32::from(velocity) / 127.0;
                     sounding.insert((track, pitch), notes.len());
                     notes.push(Sound {
                         on: sample,
                         off: sample,
-                        step: cycles - (cycles as u64) as f64,
+                        step: step(usize::from(pitch), rate),
                         levels: [level * left, level * right],
                     });
                 }
@@ -128,21 +154,70 @@ impl Score {
             ramp: (rate / 200).max(1) as f32,
             notes,
             looped: None,
+            tempo: project.tempo_map(),
+            rate,
+            metronome: false,
         }
     }
 
-    /// The score of `project`, whose playback repeats `ticks` (ADR 22). The
-    /// range is turned into frames as the schedule turns ticks into samples,
-    /// so it stays on the beat at any tempo. An empty range does not loop.
-    pub fn looped(project: &Project, sample_rate: NonZeroU32, ticks: Range<Tick>) -> Self {
-        let frame = |tick| {
-            u64::try_from(project.sample_of(sample_rate.get().into(), tick)).unwrap_or(u64::MAX)
-        };
+    /// The score, whose playback repeats `ticks` (ADR 22). The range is turned
+    /// into frames as the schedule turns ticks into samples, so it stays on
+    /// the beat at any tempo. An empty range does not loop.
+    pub fn looped(self, ticks: Range<Tick>) -> Self {
+        let frame = |tick| u64::try_from(self.frame_of(tick)).unwrap_or(u64::MAX);
         let frames = frame(ticks.start)..frame(ticks.end);
         Self {
             looped: (!frames.is_empty()).then_some(frames),
-            ..Self::new(project, sample_rate)
+            ..self
         }
+    }
+
+    /// The score with a click on every beat, higher on the first beat of each
+    /// bar (ADR 23).
+    pub fn with_metronome(self) -> Self {
+        Self {
+            metronome: true,
+            ..self
+        }
+    }
+
+    fn frame_of(&self, tick: Tick) -> u128 {
+        self.tempo.sample_of(self.rate.into(), tick)
+    }
+
+    /// The click of `beat`, which starts on its frame and lasts 20 ms, or up
+    /// to the next beat if that comes sooner.
+    fn click(&self, beat: u64) -> Sound {
+        let on = self.frame_of(beat * PPQ);
+        // The beat after the last one has a frame, though it does not click.
+        let next = self.frame_of((beat + 1) * PPQ);
+        let off = (on + u128::from((self.rate / 50).max(1))).min(next);
+        let pitch = if beat.is_multiple_of(BEATS_PER_BAR) {
+            DOWNBEAT_PITCH
+        } else {
+            BEAT_PITCH
+        };
+        Sound {
+            on,
+            off,
+            step: step(pitch, self.rate),
+            levels: [CLICK_LEVEL; 2],
+        }
+    }
+
+    /// The last beat on or before `frame`, found by bisection since beats are
+    /// in the order of their frames. Beat 0 is on frame 0.
+    fn beat_at(&self, frame: u128) -> u64 {
+        let (mut beat, mut after) = (0, LAST_BEAT + 1);
+        while after - beat > 1 {
+            let middle = beat + (after - beat) / 2;
+            if self.frame_of(middle * PPQ) <= frame {
+                beat = middle;
+            } else {
+                after = middle;
+            }
+        }
+        beat
     }
 
     /// The frames that playback repeats, if any.
@@ -162,17 +237,42 @@ impl Score {
             if note.on >= end {
                 break;
             }
-            for frame in note.on.max(start)..note.off.min(end) {
-                let [left, right] = note.sample(frame, self.ramp);
-                let out = &mut out[(frame - start) as usize];
-                out[0] += left;
-                out[1] += right;
+            note.add(start, out, self.ramp);
+        }
+        if self.metronome {
+            self.add_clicks(start, out);
+        }
+    }
+
+    /// Adds the clicks that sound in `out`, which holds the frames from
+    /// `start` on. Each turn moves to a later frame, so a block takes at most
+    /// as many turns as it has frames, however close the beats are.
+    fn add_clicks(&self, start: u128, out: &mut [Frame]) {
+        let end = start + out.len() as u128;
+        let mut frame = start;
+        while frame < end {
+            let beat = self.beat_at(frame);
+            self.click(beat).add(start, out, self.ramp);
+            if beat == LAST_BEAT {
+                break;
             }
+            frame = self.frame_of((beat + 1) * PPQ);
         }
     }
 }
 
 impl Sound {
+    /// Adds the sound to `out`, which holds the frames from `start` on.
+    fn add(&self, start: u128, out: &mut [Frame], ramp: f32) {
+        let end = start + out.len() as u128;
+        for frame in self.on.max(start)..self.off.min(end) {
+            let [left, right] = self.sample(frame, ramp);
+            let out = &mut out[(frame - start) as usize];
+            out[0] += left;
+            out[1] += right;
+        }
+    }
+
     /// A triangle wave whose level rises over the first 5 ms of the note and
     /// falls over its last 5 ms, so that it starts and stops without a click.
     fn sample(&self, frame: u128, ramp: f32) -> Frame {
