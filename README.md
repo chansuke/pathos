@@ -1,4 +1,7 @@
-# pathos
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg">
+  <img alt="pathos" src="docs/assets/banner-light.svg">
+</picture>
 
 A DAW (digital audio workstation) built with [gpui](https://gpui.rs). Early
 development.
