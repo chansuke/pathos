@@ -109,6 +109,17 @@ pub fn master_rect() -> Rect {
     }
 }
 
+/// The meter of `channel`, 0 for the left and 1 for the right, below the
+/// master volume (ADR 25).
+pub fn meter_rect(channel: usize) -> Rect {
+    let master = master_rect();
+    Rect {
+        y: master.y + master.height + 1.0 + 3.0 * channel as f32,
+        height: 2.0,
+        ..master
+    }
+}
+
 /// The solo button of a track, right of its mute button.
 pub fn solo_rect(track: u64) -> Rect {
     Rect {
@@ -404,6 +415,22 @@ mod tests {
             (rect.x, rect.width),
             (volume_rect(0).x, volume_rect(0).width)
         );
+    }
+
+    #[test]
+    fn the_meters_lie_under_the_master_volume_within_the_status_row() {
+        let master = master_rect();
+        let [left, right] = [meter_rect(0), meter_rect(1)];
+        // A pixel apart, so that the bars read as two.
+        assert_eq!(left.y, master.y + master.height + 1.0, "below the master");
+        assert_eq!(
+            right.y,
+            left.y + left.height + 1.0,
+            "the right under the left"
+        );
+        assert!(right.y + right.height <= STATUS_HEIGHT, "above the lanes");
+        assert_eq!((left.x, left.width), (master.x, master.width));
+        assert_eq!((right.x, right.width), (master.x, master.width));
     }
 
     #[test]

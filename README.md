@@ -20,6 +20,8 @@ piano roll for the selected clip:
 - `Master` at the left of the status row is the volume of the whole song,
   dragged and reset like a track's volume. It does not change the metronome
   (ADR 24).
+- The two bars under it meter the left and right channel of the song during
+  playback, from -60 dB to +6 dB, and turn red past full scale (ADR 25).
 
 - `Space` plays and stops, and `Home` returns to the start. Playback is the
   offline render of ADR 15, sample for sample.
