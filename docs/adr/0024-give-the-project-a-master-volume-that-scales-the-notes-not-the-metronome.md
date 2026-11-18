@@ -1,7 +1,7 @@
 ---
 number: 24
 title: Give the project a master volume that scales the notes, not the metronome
-status: proposed
+status: accepted
 date: 2026-11-18
 ---
 
