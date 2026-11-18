@@ -17,7 +17,7 @@ use pathos_render::Score;
 use editor::{Editor, Input, Key};
 use file::Saved;
 use layout::{
-    BEAT_WIDTH, HEADER_WIDTH, HIGHEST_PITCH, LANE_HEIGHT, LOWEST_PITCH, ROLL_BEAT_WIDTH,
+    BEAT_WIDTH, Fader, HEADER_WIDTH, HIGHEST_PITCH, LANE_HEIGHT, LOWEST_PITCH, ROLL_BEAT_WIDTH,
     ROW_HEIGHT, Rect, STATUS_HEIGHT,
 };
 
@@ -364,9 +364,28 @@ impl Render for Pathos {
             )
             .child(
                 at(Rect {
-                    x: 8.0,
+                    x: 0.0,
                     y: 0.0,
-                    width: width - 16.0,
+                    width: layout::master_rect().x,
+                    height: STATUS_HEIGHT,
+                })
+                .flex()
+                .items_center()
+                .px_2()
+                .child("Master"),
+            )
+            .child(
+                at(layout::master_rect())
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .child(editor::volume_label(self.editor.volume(Fader::Master))),
+            )
+            .child(
+                at(Rect {
+                    x: HEADER_WIDTH + 8.0,
+                    y: 0.0,
+                    width: width - HEADER_WIDTH - 16.0,
                     height: STATUS_HEIGHT,
                 })
                 .flex()
@@ -450,7 +469,7 @@ fn lanes(editor: &Editor, width: f32) -> Vec<Div> {
                 .flex()
                 .items_center()
                 .justify_end()
-                .child(editor::volume_label(editor.volume(track))),
+                .child(editor::volume_label(editor.volume(Fader::Track(track)))),
         );
         elements.push(
             at(Rect {

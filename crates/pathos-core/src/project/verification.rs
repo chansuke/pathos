@@ -44,6 +44,7 @@ fn well_formed(p: &Project, next_clip_id: u64) -> bool {
     }) && p.mixed.windows(2).all(|pair| pair[0].0 < pair[1].0);
     tempo
         && mixed
+        && p.master_volume <= MAX_VOLUME
         && in_range
         && p.clips
             .iter()
@@ -96,6 +97,7 @@ fn any_project<const TEMPO: usize, const CLIPS: usize, const NOTES: usize, const
     let project = Project {
         track_count: kani::any(),
         mixed: mixed.to_vec(),
+        master_volume: kani::any(),
         tempo: tempo.to_vec(),
         clips: clips.to_vec(),
         notes: notes.to_vec(),
@@ -448,6 +450,14 @@ apply_harness!(
         pan: kani::any(),
     }
 );
+apply_harness!(
+    set_master_volume,
+    tempo = 1,
+    clips = 0,
+    Command::SetMasterVolume {
+        volume: kani::any(),
+    }
+);
 
 /// The harnesses of each command. A new command does not compile until it is
 /// given one here.
@@ -473,6 +483,7 @@ fn harnesses(command: Command) -> &'static [fn()] {
         Command::SetTrackMute { .. } => &[set_track_mute_with_1_mixed, set_track_mute_with_2_mixed],
         Command::SetTrackSolo { .. } => &[set_track_solo_with_1_mixed, set_track_solo_with_2_mixed],
         Command::SetTrackPan { .. } => &[set_track_pan_with_1_mixed, set_track_pan_with_2_mixed],
+        Command::SetMasterVolume { .. } => &[set_master_volume],
     }
 }
 
@@ -487,6 +498,7 @@ fn tick_to_micros_does_not_overflow() {
     let project = Project {
         track_count: 0,
         mixed: Vec::new(),
+        master_volume: UNITY_VOLUME,
         tempo: tempo.to_vec(),
         clips: Vec::new(),
         notes: Vec::new(),

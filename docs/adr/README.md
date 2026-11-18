@@ -21,3 +21,4 @@
 * [21. Solo tracks in the schedule and pan them in a stereo render](0021-solo-tracks-in-the-schedule-and-pan-them-in-a-stereo-render.md)
 * [22. Loop playback over a range held by the window, not the project](0022-loop-playback-over-a-range-held-by-the-window-not-the-project.md)
 * [23. Click a metronome in the score, on the beats of the tempo map](0023-click-a-metronome-in-the-score-on-the-beats-of-the-tempo-map.md)
+* [24. Give the project a master volume that scales the notes, not the metronome](0024-give-the-project-a-master-volume-that-scales-the-notes-not-the-metronome.md)

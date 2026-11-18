@@ -216,6 +216,21 @@ proptest! {
         prop_assert_eq!(mono(&other, rate, frames), mono(&project(&[b]), rate, frames));
     }
 
+    /// At master volume 500 every track plays at exactly half the level
+    /// (ADR 24).
+    #[test]
+    fn the_master_volume_scales_every_track(a in note(), b in note(), rate in rate()) {
+        let a = NoteSpec { track: 0, ..a };
+        let b = NoteSpec { track: 1, ..b };
+        let frames = 4 * rate.get() as usize;
+        let full = project(&[a, b]);
+        let half = with(full.clone(), Command::SetMasterVolume { volume: 500 });
+        let (full, half) = (mono(&full, rate, frames), mono(&half, rate, frames));
+        for frame in 0..frames {
+            prop_assert_eq!(half[frame].to_bits(), (full[frame] * 0.5).to_bits(), "frame {}", frame);
+        }
+    }
+
     /// A track panned hard left or right sounds in that channel only, at the
     /// level it has at the center; between the center and a side, the far
     /// channel falls linearly.
@@ -600,4 +615,15 @@ fn a_long_note_above_the_rate_is_the_same_everywhere() {
     let last = play(&Score::new(history.present(), rate), 3599 * 8000, 8000);
     let hash = fnv1a(&last.concat());
     assert_eq!(hash, 0x99f8_febd_fd0a_58f5, "render hash {hash:#018x}");
+}
+
+/// The master volume scales the notes, not the metronome's clicks (ADR 24).
+#[test]
+fn the_master_volume_leaves_the_metronome_alone() {
+    let rate = NonZeroU32::new(48_000).unwrap();
+    let clicks = |project: &Project| {
+        fnv1a(&play(&Score::new(project, rate).with_metronome(), 0, 50_000).concat())
+    };
+    let silent = with(project(&[]), Command::SetMasterVolume { volume: 0 });
+    assert_eq!(clicks(&silent), clicks(&project(&[])));
 }

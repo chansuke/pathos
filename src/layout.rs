@@ -72,11 +72,18 @@ pub enum Hit {
     Pan {
         track: u64,
     },
-    /// The volume in the header of a track.
+    /// The volume in the header of a track, or the master volume.
     Volume {
-        track: u64,
+        fader: Fader,
     },
     Nothing,
+}
+
+/// A volume the window can change: a track's, or the master volume (ADR 24).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fader {
+    Track(u64),
+    Master,
 }
 
 pub fn lane_top(track: u64) -> f32 {
@@ -90,6 +97,15 @@ pub fn mute_rect(track: u64) -> Rect {
         y: lane_top(track) + 26.0,
         width: 16.0,
         height: 16.0,
+    }
+}
+
+/// The master volume, at the left of the status row, above the volumes of the
+/// tracks.
+pub fn master_rect() -> Rect {
+    Rect {
+        y: 6.0,
+        ..volume_rect(0)
     }
 }
 
@@ -188,12 +204,19 @@ pub fn playhead_x(project: &Project, sample_rate: NonZeroU32, frame: u64) -> f32
 
 /// What lies under `(x, y)`, with the piano roll showing the clip `selected`.
 pub fn hit(project: &Project, selected: Option<u64>, x: f32, y: f32) -> Hit {
+    if master_rect().contains(x, y) {
+        return Hit::Volume {
+            fader: Fader::Master,
+        };
+    }
     if x < HEADER_WIDTH {
         return match track_at(project, y) {
             Some(track) if mute_rect(track).contains(x, y) => Hit::Mute { track },
             Some(track) if solo_rect(track).contains(x, y) => Hit::Solo { track },
             Some(track) if pan_rect(track).contains(x, y) => Hit::Pan { track },
-            Some(track) if volume_rect(track).contains(x, y) => Hit::Volume { track },
+            Some(track) if volume_rect(track).contains(x, y) => Hit::Volume {
+                fader: Fader::Track(track),
+            },
             _ => Hit::Nothing,
         };
     }
@@ -332,11 +355,13 @@ mod tests {
                 "the name"
             );
             let (x, y) = center(volume_rect(track));
-            assert_eq!(hit(&project, None, x, y), Hit::Volume { track });
+            let volume = Hit::Volume {
+                fader: Fader::Track(track),
+            };
+            assert_eq!(hit(&project, None, x, y), volume);
             // The volume reaches almost to the timeline; its first pixel is
             // inside and the ones past its ends are not.
             let rect = volume_rect(track);
-            let volume = Hit::Volume { track };
             assert_eq!(hit(&project, None, rect.x, rect.y), volume);
             assert_eq!(hit(&project, None, HEADER_WIDTH - 3.0, y), volume);
             assert_eq!(hit(&project, None, rect.x + rect.width, y), Hit::Nothing);
@@ -350,6 +375,35 @@ mod tests {
         }
         let below = lane_top(project.track_count()) + 30.0;
         assert_eq!(hit(&project, None, 30.0, below), Hit::Nothing);
+    }
+
+    #[test]
+    fn the_master_volume_sits_in_the_status_row_above_the_tracks() {
+        let project = project();
+        let master = Hit::Volume {
+            fader: Fader::Master,
+        };
+        let rect = master_rect();
+        let (x, y) = center(rect);
+        assert_eq!(hit(&project, None, x, y), master);
+        assert_eq!(hit(&project, None, rect.x, rect.y), master);
+        assert_eq!(hit(&project, None, x, rect.y - 1.0), Hit::Nothing);
+        assert_eq!(hit(&project, None, x, rect.y + rect.height), Hit::Nothing);
+        assert_eq!(
+            hit(&project, None, rect.x - 1.0, y),
+            Hit::Nothing,
+            "its name"
+        );
+        assert_eq!(
+            hit(&project, None, rect.x + rect.width, y),
+            Hit::Nothing,
+            "the status"
+        );
+        assert!(rect.y + rect.height <= STATUS_HEIGHT, "above the lanes");
+        assert_eq!(
+            (rect.x, rect.width),
+            (volume_rect(0).x, volume_rect(0).width)
+        );
     }
 
     #[test]

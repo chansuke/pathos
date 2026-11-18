@@ -17,6 +17,9 @@ piano roll for the selected clip:
   or `R`) left or right moves the track between the channels. A double click
   returns either to its default. Both are heard while they are dragged
   (ADR 20, ADR 21).
+- `Master` at the left of the status row is the volume of the whole song,
+  dragged and reset like a track's volume. It does not change the metronome
+  (ADR 24).
 
 - `Space` plays and stops, and `Home` returns to the start. Playback is the
   offline render of ADR 15, sample for sample.

@@ -92,6 +92,8 @@ def Clip.overlaps (a b : Clip) : Bool :=
 the history, so that undo does not reissue ids (ADR 10). -/
 structure Project where
   tracks : List Track
+  /-- The gain of every note in thousandths, as a track's volume is (ADR 24). -/
+  masterVolume : Nat := unityVolume
   /-- Ordered by tick, starting at tick 0. -/
   tempo : List TempoChange
   /-- Ordered by id. -/
@@ -123,6 +125,7 @@ inductive Command where
   | setTrackMute (track : Nat) (muted : Bool)
   | setTrackSolo (track : Nat) (solo : Bool)
   | setTrackPan (track : Nat) (pan : Nat)
+  | setMasterVolume (volume : Nat)
   deriving Repr, DecidableEq
 
 inductive Error where
@@ -246,6 +249,9 @@ def step (p : Project) (nextClipId : Nat) : Command → Except Error (Project ×
     let some t := p.tracks[track]? | throw .unknownTrack
     if pan > maxPan then throw .invalidPan
     pure ({ p with tracks := p.tracks.set track { t with pan } }, nextClipId)
+  | .setMasterVolume volume => do
+    if volume > maxVolume then throw .invalidVolume
+    pure ({ p with masterVolume := volume }, nextClipId)
 
 /-- `ppq` times the microseconds from the first tempo change to `tick`. -/
 def microsTimesPpq : List TempoChange → Tick → Nat
@@ -305,9 +311,10 @@ where
     | [_] => true
     | current :: next :: rest => current.id < next.id && ordered (next :: rest)
 
-/-- Every track's volume and pan are in range. -/
+/-- Every track's volume and pan, and the master volume, are in range. -/
 def tracksWellFormed (p : Project) : Bool :=
-  p.tracks.all fun t => t.volume ≤ maxVolume && t.pan ≤ maxPan
+  p.tracks.all (fun t => t.volume ≤ maxVolume && t.pan ≤ maxPan)
+    && p.masterVolume ≤ maxVolume
 
 /-- `p` is well-formed when the next created clip receives `nextClipId`. -/
 def Project.wellFormed (p : Project) (nextClipId : Nat) : Bool :=

@@ -10,7 +10,7 @@ use pathos_core::{
     Tick, UNITY_VOLUME,
 };
 
-use crate::layout::{self, BEAT_WIDTH, Hit};
+use crate::layout::{self, BEAT_WIDTH, Fader, Hit};
 
 /// A new clip lasts one bar of 4/4.
 const CLIP_LENGTH: u64 = 4 * PPQ;
@@ -48,11 +48,11 @@ enum Drag {
         id: u64,
         x: f32,
     },
-    /// A track's volume or pan. It is heard while it moves and applied when
-    /// the button is released, so that the whole gesture is one step of undo
-    /// (ADR 20, ADR 21).
+    /// A volume or a track's pan. It is heard while it moves and applied
+    /// when the button is released, so that the whole gesture is one step of
+    /// undo (ADR 20, ADR 21, ADR 24).
     Volume {
-        track: u64,
+        fader: Fader,
         y: f32,
         from: f32,
         volume: u16,
@@ -70,12 +70,12 @@ impl Drag {
     fn to(self, x: f32, y: f32) -> Drag {
         match self {
             Drag::Volume {
-                track,
+                fader,
                 y: from_y,
                 from,
                 ..
             } => Drag::Volume {
-                track,
+                fader,
                 y: from_y,
                 from,
                 volume: volume_at(from + (from_y - y) * DECIBELS_PER_PIXEL),
@@ -97,13 +97,10 @@ impl Drag {
         }
     }
 
-    /// The command that a drag of a track's volume or pan applies.
+    /// The command that a drag of a volume or a track's pan applies.
     fn command(&self) -> Option<Command> {
         match *self {
-            Drag::Volume { track, volume, .. } => Some(Command::SetTrackVolume {
-                track,
-                volume: volume.into(),
-            }),
+            Drag::Volume { fader, volume, .. } => Some(set_volume(fader, volume)),
             Drag::Pan { track, pan, .. } => Some(Command::SetTrackPan {
                 track,
                 pan: pan.into(),
@@ -173,20 +170,23 @@ impl Editor {
         }
     }
 
-    /// The volume of `track` as the window shows it: while it is dragged, the
-    /// volume it would get.
-    pub fn volume(&self, track: u64) -> u16 {
-        match self.drag {
-            Some(Drag::Volume {
-                track: dragged,
-                volume,
-                ..
-            }) if dragged == track => volume,
-            _ => self
-                .history()
-                .present()
+    /// The volume of `fader` as the window shows it: while it is dragged,
+    /// the volume it would get.
+    pub fn volume(&self, fader: Fader) -> u16 {
+        let project = self.history().present();
+        match (self.drag, fader) {
+            (
+                Some(Drag::Volume {
+                    fader: dragged,
+                    volume,
+                    ..
+                }),
+                _,
+            ) if dragged == fader => volume,
+            (_, Fader::Track(track)) => project
                 .track(track)
                 .map_or(UNITY_VOLUME, |track| track.volume),
+            (_, Fader::Master) => project.master_volume(),
         }
     }
 
@@ -268,16 +268,13 @@ impl Editor {
                         });
                         None
                     }
-                    Hit::Volume { track } if clicks == 2 => {
-                        Some(Edit::Apply(Command::SetTrackVolume {
-                            track,
-                            volume: UNITY_VOLUME.into(),
-                        }))
+                    Hit::Volume { fader } if clicks == 2 => {
+                        Some(Edit::Apply(set_volume(fader, UNITY_VOLUME)))
                     }
-                    Hit::Volume { track } => {
-                        let volume = self.volume(track);
+                    Hit::Volume { fader } => {
+                        let volume = self.volume(fader);
                         self.drag = Some(Drag::Volume {
-                            track,
+                            fader,
                             y,
                             from: decibels(volume).unwrap_or(SILENT_DECIBELS),
                             volume,
@@ -353,6 +350,15 @@ impl Editor {
     }
 }
 
+/// The command that sets `fader` to `volume`.
+fn set_volume(fader: Fader, volume: u16) -> Command {
+    let volume = volume.into();
+    match fader {
+        Fader::Track(track) => Command::SetTrackVolume { track, volume },
+        Fader::Master => Command::SetMasterVolume { volume },
+    }
+}
+
 /// The level of `volume` in decibels, or `None` when it is silent.
 pub fn decibels(volume: u16) -> Option<f32> {
     (volume > 0).then(|| 20.0 * (f32::from(volume) / f32::from(UNITY_VOLUME)).log10())
@@ -415,8 +421,8 @@ fn round_nearest(tick: Tick, step: u64) -> Tick {
 mod tests {
     use super::*;
     use crate::layout::{
-        HEADER_WIDTH, LANE_HEIGHT, ROLL_BEAT_WIDTH, ROW_HEIGHT, Rect, lane_top, mute_rect,
-        pan_rect, row_top, solo_rect, volume_rect,
+        HEADER_WIDTH, LANE_HEIGHT, ROLL_BEAT_WIDTH, ROW_HEIGHT, Rect, lane_top, master_rect,
+        mute_rect, pan_rect, row_top, solo_rect, volume_rect,
     };
 
     /// The point `beats` into the lane of `track`, halfway down.
@@ -585,12 +591,16 @@ mod tests {
                 volume: 1995
             })
         );
-        assert_eq!(editor.volume(0), 1995);
+        assert_eq!(editor.volume(Fader::Track(0)), 1995);
         let heard = editor.heard();
         assert_eq!(heard.track(0).unwrap().volume, 1995);
         assert_eq!(heard.track(1).unwrap().volume, UNITY_VOLUME);
         assert_eq!(heard.clips(), editor.history().present().clips());
-        assert_eq!(editor.volume(1), UNITY_VOLUME, "the other track");
+        assert_eq!(
+            editor.volume(Fader::Track(1)),
+            UNITY_VOLUME,
+            "the other track"
+        );
         assert_edits(&editor, &SETUP);
         editor.handle(Input::Up { x, y: y - 24.0 });
         assert_eq!(editor.pending(), None);
@@ -602,10 +612,10 @@ mod tests {
                 volume: 1995,
             }),
         );
-        assert_eq!(editor.volume(0), 1995);
+        assert_eq!(editor.volume(Fader::Track(0)), 1995);
         // Down from there by 12 dB: -6 dB is a gain of 0.501.
         drag(&mut editor, (x, y), (x, y + 48.0));
-        assert_eq!(editor.volume(0), 501);
+        assert_eq!(editor.volume(Fader::Track(0)), 501);
     }
 
     #[test]
@@ -613,12 +623,12 @@ mod tests {
         let mut editor = with_clip();
         let (x, y) = center(volume_rect(0));
         drag(&mut editor, (x, y), (x, y - 1000.0));
-        assert_eq!(editor.volume(0), MAX_VOLUME);
+        assert_eq!(editor.volume(Fader::Track(0)), MAX_VOLUME);
         drag(&mut editor, (x, y), (x, y + 1000.0));
-        assert_eq!(editor.volume(0), 0);
+        assert_eq!(editor.volume(Fader::Track(0)), 0);
         // From silence, a drag starts at -60 dB.
         drag(&mut editor, (x, y), (x, y - 4.0));
-        assert_eq!(editor.volume(0), 1);
+        assert_eq!(editor.volume(Fader::Track(0)), 1);
     }
 
     #[test]
@@ -639,8 +649,28 @@ mod tests {
         let (x, y) = center(volume_rect(0));
         drag(&mut editor, (x, y), (x, y + 8.0));
         click(&mut editor, (x, y), 2);
-        assert_eq!(editor.volume(0), UNITY_VOLUME);
+        assert_eq!(editor.volume(Fader::Track(0)), UNITY_VOLUME);
         assert_eq!(editor.history().undo_depth(), SETUP.len() + 2);
+    }
+
+    #[test]
+    fn dragging_the_master_volume_is_heard_and_applies_one_edit_on_release() {
+        let mut editor = with_clip();
+        let (x, y) = center(master_rect());
+        editor.handle(Input::Down { x, y, clicks: 1 });
+        editor.handle(Input::Move { x, y: y + 24.0 });
+        // Six decibels down: a gain of 0.501.
+        assert_eq!(
+            editor.pending(),
+            Some(Command::SetMasterVolume { volume: 501 })
+        );
+        assert_eq!(editor.volume(Fader::Master), 501);
+        assert_eq!(editor.heard().master_volume(), 501);
+        assert_eq!(editor.volume(Fader::Track(0)), UNITY_VOLUME, "a track");
+        editor.handle(Input::Up { x, y: y + 24.0 });
+        assert_edits(&editor, &and(Command::SetMasterVolume { volume: 501 }));
+        click(&mut editor, (x, y), 2);
+        assert_eq!(editor.volume(Fader::Master), UNITY_VOLUME);
     }
 
     #[test]

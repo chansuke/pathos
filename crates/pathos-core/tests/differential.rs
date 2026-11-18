@@ -114,6 +114,7 @@ request_kinds! {
     Request::Edit(Edit::Apply(Command::SetTrackSolo { solo: true, .. })) => "solo-track",
     Request::Edit(Edit::Apply(Command::SetTrackSolo { solo: false, .. })) => "unsolo-track",
     Request::Edit(Edit::Apply(Command::SetTrackPan { .. })) => "set-track-pan",
+    Request::Edit(Edit::Apply(Command::SetMasterVolume { .. })) => "set-master-volume",
     Request::Edit(Edit::Undo) => "undo",
     Request::Edit(Edit::Redo) => "redo",
     Request::Micros(_) => "micros",
@@ -159,8 +160,9 @@ fn render(history: &History) -> String {
         })
         .collect();
     format!(
-        "tracks={} next={} tempo={} clips={} undo={} redo={}",
+        "tracks={} master={} next={} tempo={} clips={} undo={} redo={}",
         tracks.join(","),
+        project.master_volume(),
         history.next_clip_id(),
         tempo.join(","),
         clips.join(","),
@@ -373,11 +375,11 @@ fn command() -> impl Strategy<Value = Command> {
             .prop_map(|(track, start, length)| Command::AddClip { track, start, length }),
         4 => (id.clone(), track.clone(), tick())
             .prop_map(|(id, track, start)| Command::MoveClip { id, track, start }),
-        4 => (id.clone(), tick()).prop_map(|(id, tick)| Command::SplitClip { id, tick }),
+        5 => (id.clone(), tick()).prop_map(|(id, tick)| Command::SplitClip { id, tick }),
         2 => id.prop_map(|id| Command::DeleteClip { id }),
         3 => (tick(), us_per_quarter())
             .prop_map(|(tick, us_per_quarter)| Command::SetTempo { tick, us_per_quarter }),
-        4 => tick().prop_map(|tick| Command::RemoveTempo { tick }),
+        5 => tick().prop_map(|tick| Command::RemoveTempo { tick }),
         3 => (note_clip.clone(), note_start(), note_length(), pitch(), velocity()).prop_map(
             |(id, start, length, pitch, velocity)| Command::AddNote {
                 id,
@@ -396,6 +398,7 @@ fn command() -> impl Strategy<Value = Command> {
         2 => (track.clone(), any::<bool>())
             .prop_map(|(track, solo)| Command::SetTrackSolo { track, solo }),
         2 => (track, pan()).prop_map(|(track, pan)| Command::SetTrackPan { track, pan }),
+        1 => volume().prop_map(|volume| Command::SetMasterVolume { volume }),
     ]
 }
 
@@ -557,6 +560,21 @@ fn core_agrees_with_model_on_boundaries() {
         })
     };
     let traces = [
+        // The master volume may reach the maximum but not exceed it, also
+        // beyond u16, and is undone like any edit.
+        vec![
+            apply(SetMasterVolume {
+                volume: u64::from(MAX_VOLUME),
+            }),
+            apply(SetMasterVolume {
+                volume: u64::from(MAX_VOLUME) + 1,
+            }),
+            apply(SetMasterVolume {
+                volume: u64::from(u16::MAX) + 1 + 500,
+            }),
+            apply(SetMasterVolume { volume: 0 }),
+            Request::Edit(Edit::Undo),
+        ],
         // A volume may reach the maximum but not exceed it, also beyond u16;
         // setting a track back to a new track's volume and mute matches one
         // never changed; a muted track's notes leave the schedule.

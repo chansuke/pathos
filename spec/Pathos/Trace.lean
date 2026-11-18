@@ -40,6 +40,7 @@ def Request.parse (line : String) : Option Request := do
   | "solo-track", [track] => some (.edit (.apply (.setTrackSolo track true)))
   | "unsolo-track", [track] => some (.edit (.apply (.setTrackSolo track false)))
   | "set-track-pan", [track, pan] => some (.edit (.apply (.setTrackPan track pan)))
+  | "set-master-volume", [volume] => some (.edit (.apply (.setMasterVolume volume)))
   | "undo", [] => some (.edit .undo)
   | "redo", [] => some (.edit .redo)
   | "micros", [tick] => some (.micros tick)
@@ -74,7 +75,7 @@ def History.render (h : History) : String :=
     s!"{c.id}:{c.track}:{c.start}:{c.length}[{";".intercalate notes}]"
   let tracks := p.tracks.map fun t =>
     s!"{t.volume}:{t.pan}{if t.muted then "m" else ""}{if t.solo then "s" else ""}"
-  s!"tracks={",".intercalate tracks} next={h.nextClipId} tempo={",".intercalate tempo} "
+  s!"tracks={",".intercalate tracks} master={p.masterVolume} next={h.nextClipId} tempo={",".intercalate tempo} "
     ++ s!"clips={",".intercalate clips} undo={h.past.length} redo={h.future.length}"
 
 def Event.render : Event → String

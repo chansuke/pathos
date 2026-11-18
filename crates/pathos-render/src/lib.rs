@@ -56,7 +56,8 @@ const CLICK_LEVEL: f32 = 0.5;
 pub type Frame = [f32; 2];
 
 /// The first `frames` frames of the project at `sample_rate`. Each track is
-/// weighted by its volume (ADR 20) and placed by its pan (ADR 21).
+/// weighted by its volume (ADR 20) and placed by its pan (ADR 21), and every
+/// note by the master volume (ADR 24).
 pub fn render(project: &Project, sample_rate: NonZeroU32, frames: usize) -> Vec<Frame> {
     let mut out = vec![[0.0; 2]; frames];
     Score::new(project, sample_rate).render(0, &mut out);
@@ -117,6 +118,9 @@ impl Score {
         let rate = sample_rate.get();
         let mut notes = Vec::new();
         let mut sounding = BTreeMap::new();
+        // Exactly 1 at volume 1000, which leaves every level as it was before
+        // the project had a master volume (ADR 24).
+        let master = f32::from(project.master_volume()) / f32::from(UNITY_VOLUME);
         for event in project.schedule(rate.into()) {
             match event {
                 Event::On {
@@ -132,7 +136,7 @@ impl Score {
                         on: sample,
                         off: sample,
                         step: step(usize::from(pitch), rate),
-                        levels: [level * left, level * right],
+                        levels: [level * left * master, level * right * master],
                     });
                 }
                 Event::Off {
