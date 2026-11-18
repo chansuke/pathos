@@ -2,6 +2,7 @@ mod editor;
 mod file;
 mod layout;
 mod meter;
+mod readout;
 
 use std::ops::Range;
 use std::path::PathBuf;
@@ -19,8 +20,8 @@ use pathos_render::Score;
 use editor::{Editor, Input, Key};
 use file::Saved;
 use layout::{
-    BEAT_WIDTH, Fader, HEADER_WIDTH, HIGHEST_PITCH, LANE_HEIGHT, LOWEST_PITCH, ROLL_BEAT_WIDTH,
-    ROW_HEIGHT, Rect, STATUS_HEIGHT,
+    BEAT_WIDTH, FOOTER_HEIGHT, Fader, HEADER_WIDTH, HIGHEST_PITCH, LANE_HEIGHT, LOWEST_PITCH,
+    ROLL_BEAT_WIDTH, ROW_HEIGHT, RULER_HEIGHT, Rect, TIMELINE_TOP, TOP_BAR_HEIGHT,
 };
 use meter::Meter;
 
@@ -38,6 +39,8 @@ const NOTE: u32 = 0xe8c547;
 const TEXT: u32 = 0xe6e8eb;
 /// Labels and values that are read less often than names.
 const SUBTLE_TEXT: u32 = 0x8a919b;
+/// Text on controls that are off.
+const SOFT_TEXT: u32 = 0xc9ced6;
 const SELECTION: u32 = 0xf2f4f7;
 const ERROR: u32 = 0xe06c75;
 const PLAYHEAD: u32 = 0xf0f0f0;
@@ -46,13 +49,29 @@ const SOLOED: u32 = 0x67c587;
 /// The colors of the tracks in turn. A track's color follows its place, so it
 /// is not part of the project.
 const TRACK_COLORS: [u32; 6] = [0x5aa9ff, 0xb48cff, 0x4fd1c5, 0xf48fb1, 0xe2b54a, 0x67c587];
+/// The color of the play button, the loop and the toggles that are on.
+const ACCENT: u32 = 0x5aa9ff;
 /// The loop range over the lanes, translucent so that clips show through.
-const LOOP: u32 = 0x61afef33;
-const LOOP_BAR: u32 = 0x61afef;
+const LOOP: u32 = ACCENT << 8 | 0x12;
+/// The ground of a readout, darker than the bar around it.
+const READOUT: u32 = 0x0f1113;
+/// The meter's zones: up to -6 dB, up to full scale, and past it.
+const METER_LOW: u32 = 0x57b97a;
+const METER_HIGH: u32 = 0xe2b54a;
 
-const HINT: &str = "T: track · Double-click a lane: clip · Drag: move · S: split · Delete: delete · \
-                    Click the roll: note · Ctrl-Z / Ctrl-Shift-Z: undo / redo · Space: play · \
-                    Home: start · L: loop · K: metronome · Ctrl-S: save · Ctrl-O: open";
+/// The keys the footer lists, with what each does. The loop's and the
+/// metronome's are on their buttons and the track's on the ruler.
+const KEYS: [(&str, &str); 9] = [
+    ("Space", "play"),
+    ("Home", "start"),
+    ("S", "split"),
+    ("Delete", "delete"),
+    ("Ctrl Z", "undo"),
+    ("Ctrl Shift Z", "redo"),
+    ("Ctrl S", "save"),
+    ("Ctrl Shift S", "save as"),
+    ("Ctrl O", "open"),
+];
 
 /// The outcome of the last save or open, shown until the next accepted edit.
 enum Notice {
@@ -269,19 +288,467 @@ impl Pathos {
         cx.notify();
     }
 
+    fn toggle_metronome(&mut self, cx: &mut Context<Self>) {
+        self.metronome = !self.metronome;
+        self.publish();
+        cx.notify();
+    }
+
+    fn play_or_stop(&mut self, cx: &mut Context<Self>) {
+        if let Ok(output) = &self.output {
+            let transport = output.transport();
+            if transport.is_playing() {
+                transport.stop();
+            } else {
+                transport.play();
+            }
+            cx.notify();
+        }
+    }
+
+    fn rewind(&mut self, cx: &mut Context<Self>) {
+        if let Ok(output) = &self.output {
+            output.transport().seek(0);
+            cx.notify();
+        }
+    }
+
     fn handle_transport(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
-        let Ok(output) = &self.output else {
-            return false;
-        };
-        let transport = output.transport();
         match event.keystroke.key.as_str() {
-            "space" if transport.is_playing() => transport.stop(),
-            "space" => transport.play(),
-            "home" => transport.seek(0),
+            "space" => self.play_or_stop(cx),
+            "home" => self.rewind(cx),
             _ => return false,
         }
-        cx.notify();
         true
+    }
+
+    /// The bar at the top: the file, the transport, the readout, the loop and
+    /// metronome toggles, the master volume and the meter (ADR 27).
+    fn top_bar(&self, width: f32, tick: Tick, frame: u64, cx: &mut Context<Self>) -> Vec<Div> {
+        let project = self.editor.history().present();
+        let playing = self
+            .output
+            .as_ref()
+            .is_ok_and(|output| output.transport().is_playing());
+        let name = self
+            .saved
+            .path()
+            .and_then(|path| path.file_name())
+            .map_or("untitled".into(), |name| {
+                name.to_string_lossy().into_owned()
+            });
+        let modified = self.saved.modified(self.editor.document());
+        let time = match &self.output {
+            Ok(output) => readout::time_label(frame, output.sample_rate()),
+            Err(_) => "-:--.---".into(),
+        };
+        let mut elements = vec![
+            at(Rect {
+                x: 0.0,
+                y: 0.0,
+                width,
+                height: TOP_BAR_HEIGHT,
+            })
+            .bg(rgb(PANEL))
+            .border_b_1()
+            .border_color(rgb(GRID)),
+            at(Rect {
+                x: 16.0,
+                y: 0.0,
+                width: layout::home_rect().x - 32.0,
+                height: TOP_BAR_HEIGHT,
+            })
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .text_size(px(15.0))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("pathos"),
+            )
+            .child(div().w(px(1.0)).h(px(16.0)).bg(rgb(CONTROL_BORDER)))
+            .child(
+                div()
+                    .truncate()
+                    .text_sm()
+                    .text_color(rgb(SOFT_TEXT))
+                    .child(name),
+            )
+            .children(modified.then(|| {
+                div()
+                    .flex_none()
+                    .size(px(6.0))
+                    .rounded(px(3.0))
+                    .bg(rgb(MUTED))
+            })),
+            at(Rect {
+                x: layout::home_rect().x - 4.0,
+                y: layout::home_rect().y - 3.0,
+                width: layout::play_rect().x + layout::play_rect().width - layout::home_rect().x
+                    + 8.0,
+                height: layout::home_rect().height + 6.0,
+            })
+            .rounded(px(8.0))
+            .bg(rgb(BACKGROUND))
+            .border_1()
+            .border_color(rgb(GRID)),
+            at(layout::home_rect())
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(6.0))
+                .text_color(rgb(SOFT_TEXT))
+                .child("⏮")
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        this.rewind(cx);
+                    }),
+                ),
+            at(layout::play_rect())
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(6.0))
+                .bg(rgb(ACCENT))
+                .text_color(rgb(BACKGROUND))
+                .child(if playing { "■" } else { "▶" })
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        this.play_or_stop(cx);
+                    }),
+                ),
+            readout_view(
+                &readout::position_label(tick),
+                &time,
+                &readout::tempo_label(project, tick),
+            ),
+            toggle_view(
+                layout::loop_button_rect(),
+                "Loop",
+                "L",
+                self.looping.is_some(),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.toggle_loop(cx);
+                }),
+            ),
+            toggle_view(
+                layout::metronome_button_rect(),
+                "Metronome",
+                "K",
+                self.metronome,
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.toggle_metronome(cx);
+                }),
+            ),
+        ];
+        let master = layout::master_rect(width);
+        elements.push(
+            at(Rect {
+                y: 8.0,
+                height: 14.0,
+                ..master
+            })
+            .flex()
+            .justify_end()
+            .child(caption("Master")),
+        );
+        elements.push(
+            at(master)
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(4.0))
+                .border_1()
+                .border_color(rgb(GRID))
+                .bg(rgb(CONTROL))
+                .child(editor::volume_label(self.editor.volume(Fader::Master))),
+        );
+        elements.extend(meter_view(width, self.meter.levels()));
+        elements
+    }
+}
+
+/// A small label above a value.
+fn caption(text: &'static str) -> Div {
+    div()
+        .text_size(px(10.0))
+        .text_color(rgb(SUBTLE_TEXT))
+        .child(text.to_uppercase())
+}
+
+/// A key as the footer and the toggles show it.
+fn key_cap(key: &'static str) -> Div {
+    div()
+        .px(px(5.0))
+        .rounded(px(4.0))
+        .border_1()
+        .border_b_2()
+        .border_color(rgb(CONTROL_BORDER))
+        .bg(rgb(CONTROL))
+        .text_size(px(11.0))
+        .text_color(rgb(SOFT_TEXT))
+        .child(key)
+}
+
+/// The position, the time and the tempo, each under its caption.
+fn readout_view(position: &str, time: &str, tempo: &str) -> Div {
+    let cell = |name: &'static str, value: &str, width: f32| {
+        div()
+            .w(px(width))
+            .h_full()
+            .px(px(14.0))
+            .flex()
+            .flex_col()
+            .justify_center()
+            .child(caption(name))
+            .child(div().text_size(px(16.0)).child(value.to_string()))
+    };
+    at(layout::readout_rect())
+        .flex()
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(rgb(GRID))
+        .bg(rgb(READOUT))
+        .child(cell("Bar", position, 92.0))
+        .child(div().w(px(1.0)).h_full().bg(rgb(GRID)))
+        .child(cell("Time", time, 108.0))
+        .child(div().w(px(1.0)).h_full().bg(rgb(GRID)))
+        .child(cell("Tempo", tempo, 82.0))
+}
+
+/// A button that turns something on and off, with its key.
+fn toggle_view(rect: Rect, label: &'static str, key: &'static str, on: bool) -> Div {
+    let button = at(rect)
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap_2()
+        .rounded(px(6.0))
+        .border_1()
+        .text_sm()
+        .child(label)
+        .child(key_cap(key));
+    if on {
+        button
+            .bg(rgba(ACCENT << 8 | 0x29))
+            .border_color(rgba(ACCENT << 8 | 0xb3))
+    } else {
+        button
+            .bg(rgb(CONTROL))
+            .border_color(rgb(GRID))
+            .text_color(rgb(SOFT_TEXT))
+    }
+}
+
+/// The meter of each channel in its zones, a line at full scale and the
+/// scale below (ADR 25).
+fn meter_view(width: f32, levels: [f32; 2]) -> Vec<Div> {
+    let decibels = |decibels: f32| 10f32.powf(decibels / 20.0);
+    let left = layout::meter_rect(width, 0);
+    let at_level = |level: f32| left.width * meter::fraction(level);
+    let (high, full) = (at_level(decibels(-6.0)), at_level(1.0));
+    let mut elements = Vec::new();
+    for (channel, level) in levels.into_iter().enumerate() {
+        let rect = layout::meter_rect(width, channel);
+        let filled = at_level(level);
+        let zone = |from: f32, to: f32, color: u32| {
+            at(Rect {
+                x: rect.x + from,
+                width: (filled.min(to) - from).max(0.0),
+                ..rect
+            })
+            .bg(rgb(color))
+        };
+        elements.push(at(rect).rounded(px(2.0)).bg(rgb(GRID)));
+        elements.push(zone(0.0, high, METER_LOW));
+        elements.push(zone(high, full, METER_HIGH));
+        elements.push(zone(full, rect.width, ERROR));
+        elements.push(
+            at(Rect {
+                x: rect.x + full,
+                width: 1.0,
+                ..rect
+            })
+            .bg(rgb(PANEL)),
+        );
+    }
+    let below = layout::meter_rect(width, 1);
+    elements.extend([-60.0, -24.0, -12.0, -6.0, 0.0, 6.0].map(|level: f32| {
+        let x = below.x + at_level(decibels(level)).clamp(8.0, below.width - 8.0);
+        at(Rect {
+            x: x - 16.0,
+            y: below.y + below.height + 2.0,
+            width: 32.0,
+            height: 12.0,
+        })
+        .flex()
+        .justify_center()
+        .text_size(px(9.0))
+        .text_color(rgb(SUBTLE_TEXT))
+        .child(if level > 0.0 {
+            format!("+{level}")
+        } else {
+            format!("{level}")
+        })
+    }));
+    elements
+}
+
+/// The ruler between the top bar and the lanes: the number of each bar, a
+/// tick on each beat, the loop and where the playhead is.
+fn ruler(
+    project: &Project,
+    looping: Option<&Range<Tick>>,
+    playhead: Option<f32>,
+    width: f32,
+) -> Vec<Div> {
+    let top = TOP_BAR_HEIGHT;
+    let mut elements = vec![
+        at(Rect {
+            x: 0.0,
+            y: top,
+            width: HEADER_WIDTH,
+            height: RULER_HEIGHT,
+        })
+        .flex()
+        .items_center()
+        .justify_between()
+        .px_3()
+        .bg(rgb(PANEL))
+        .border_b_1()
+        .border_r_1()
+        .border_color(rgb(GRID))
+        .child(caption("Tracks"))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .text_color(rgb(SUBTLE_TEXT))
+                .child(key_cap("T"))
+                .child("add"),
+        ),
+        at(Rect {
+            x: HEADER_WIDTH,
+            y: top,
+            width: width - HEADER_WIDTH,
+            height: RULER_HEIGHT,
+        })
+        .bg(rgb(LANE))
+        .border_b_1()
+        .border_color(rgb(GRID)),
+    ];
+    let beats = ((width - HEADER_WIDTH) / BEAT_WIDTH) as u64;
+    for beat in 0..=beats {
+        let x = HEADER_WIDTH + beat as f32 * BEAT_WIDTH;
+        if beat % 4 == 0 {
+            elements.push(
+                at(Rect {
+                    x,
+                    y: top,
+                    width: 1.0,
+                    height: RULER_HEIGHT,
+                })
+                .bg(rgb(CONTROL_BORDER)),
+            );
+            elements.push(
+                at(Rect {
+                    x: x + 6.0,
+                    y: top + 4.0,
+                    width: 4.0 * BEAT_WIDTH - 8.0,
+                    height: 14.0,
+                })
+                .text_size(px(11.0))
+                .text_color(rgb(SUBTLE_TEXT))
+                .child((beat / 4 + 1).to_string()),
+            );
+        } else {
+            elements.push(
+                at(Rect {
+                    x,
+                    y: top + RULER_HEIGHT - 5.0,
+                    width: 1.0,
+                    height: 5.0,
+                })
+                .bg(rgb(CONTROL_BORDER)),
+            );
+        }
+    }
+    if let Some(ticks) = looping {
+        let lanes = layout::loop_rect(project, ticks);
+        elements.push(
+            at(Rect {
+                y: top + 4.0,
+                height: 10.0,
+                ..lanes
+            })
+            .border_t_2()
+            .border_l_2()
+            .border_r_2()
+            .rounded_t(px(3.0))
+            .border_color(rgb(ACCENT)),
+        );
+    }
+    if let Some(x) = playhead {
+        elements.push(
+            at(Rect {
+                x: x - 6.0,
+                y: TIMELINE_TOP - 11.0,
+                width: 13.0,
+                height: 11.0,
+            })
+            .flex()
+            .justify_center()
+            .text_size(px(10.0))
+            .text_color(rgb(PLAYHEAD))
+            .child("▼"),
+        );
+    }
+    elements
+}
+
+/// The bar at the bottom: the status when there is one, else the keys.
+fn footer(status: Option<(String, bool)>, width: f32, height: f32) -> Div {
+    let bar = at(Rect {
+        x: 0.0,
+        y: height - FOOTER_HEIGHT,
+        width,
+        height: FOOTER_HEIGHT,
+    })
+    .flex()
+    .items_center()
+    .gap_4()
+    .px_4()
+    .bg(rgb(PANEL))
+    .border_t_1()
+    .border_color(rgb(GRID))
+    .text_color(rgb(SUBTLE_TEXT));
+    match status {
+        Some((message, error)) => bar
+            .text_color(rgb(if error { ERROR } else { SOFT_TEXT }))
+            .child(div().truncate().child(message)),
+        None => bar.children(KEYS.map(|(key, action)| {
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap_1()
+                .child(key_cap(key))
+                .child(action)
+        })),
     }
 }
 
@@ -292,21 +759,17 @@ impl Render for Pathos {
             window.set_window_title(&title);
             self.title = title;
         }
-        let project = self.editor.history().present();
-        let selected = self.editor.selected();
         let width = f32::from(window.viewport_size().width);
+        let height = f32::from(window.viewport_size().height);
+        self.editor.resize(width);
         let status = match (self.editor.rejected(), &self.notice, &self.output) {
-            (Some(error), _, _) => div().text_color(rgb(ERROR)).child(error.to_string()),
+            (Some(error), _, _) => Some((error.to_string(), true)),
             (None, Some(Notice::Saved(path)), _) => {
-                div().child(format!("Saved {}", path.display()))
+                Some((format!("Saved {}", path.display()), false))
             }
-            (None, Some(Notice::Failed(error)), _) => {
-                div().text_color(rgb(ERROR)).child(error.clone())
-            }
-            (None, None, Err(error)) => div()
-                .text_color(rgb(ERROR))
-                .child(format!("No audio output: {error}")),
-            (None, None, Ok(_)) => div().child(HINT),
+            (None, Some(Notice::Failed(error)), _) => Some((error.clone(), true)),
+            (None, None, Err(error)) => Some((format!("No audio output: {error}"), true)),
+            (None, None, Ok(_)) => None,
         };
         if let Ok(output) = &self.output {
             let now = Instant::now();
@@ -318,20 +781,24 @@ impl Render for Pathos {
                 window.request_animation_frame();
             }
         }
-        let playhead = self.output.as_ref().ok().map(|output| {
-            output.collect();
-            let transport = output.transport();
-            if transport.is_playing() {
-                window.request_animation_frame();
+        let project = self.editor.history().present();
+        let selected = self.editor.selected();
+        let (tick, frame, playhead) = match &self.output {
+            Ok(output) => {
+                output.collect();
+                let transport = output.transport();
+                if transport.is_playing() {
+                    window.request_animation_frame();
+                }
+                let frame = transport.position();
+                let tick = layout::tick_at(project, output.sample_rate(), frame);
+                let x = layout::playhead_x(project, output.sample_rate(), frame);
+                (tick, frame, Some(x))
             }
-            at(Rect {
-                x: layout::playhead_x(project, output.sample_rate(), transport.position()),
-                y: STATUS_HEIGHT,
-                width: 1.0,
-                height: project.track_count() as f32 * LANE_HEIGHT,
-            })
-            .bg(rgb(PLAYHEAD))
-        });
+            Err(_) => (0, 0, None),
+        };
+        let top_bar = self.top_bar(width, tick, frame, cx);
+        let project = self.editor.history().present();
 
         div()
             .size_full()
@@ -350,9 +817,7 @@ impl Render for Pathos {
                     return;
                 }
                 if event.keystroke.key == "k" && !modifiers.secondary() {
-                    this.metronome = !this.metronome;
-                    this.publish();
-                    cx.notify();
+                    this.toggle_metronome(cx);
                     return;
                 }
                 if let Some(key) = key(event) {
@@ -388,56 +853,8 @@ impl Render for Pathos {
                     this.handle(Input::Up { x, y }, cx);
                 }),
             )
-            .child(
-                at(Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: layout::master_rect().x,
-                    height: STATUS_HEIGHT,
-                })
-                .flex()
-                .items_center()
-                .px_2()
-                .child("Master"),
-            )
-            .child(
-                at(layout::master_rect())
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    .child(editor::volume_label(self.editor.volume(Fader::Master))),
-            )
-            .children(
-                self.meter
-                    .levels()
-                    .into_iter()
-                    .enumerate()
-                    .flat_map(|(channel, level)| {
-                        let rect = layout::meter_rect(channel);
-                        let color = if meter::clips(level) { ERROR } else { SOLOED };
-                        let filled = Rect {
-                            width: rect.width * meter::fraction(level),
-                            ..rect
-                        };
-                        [at(rect).bg(rgb(GRID)), at(filled).bg(rgb(color))]
-                    }),
-            )
-            .child(
-                at(Rect {
-                    x: HEADER_WIDTH + 8.0,
-                    y: 0.0,
-                    width: width - HEADER_WIDTH - 16.0,
-                    height: STATUS_HEIGHT,
-                })
-                .flex()
-                .items_center()
-                .gap_4()
-                .child(div().flex_1().min_w_0().truncate().child(status))
-                .children(
-                    self.metronome
-                        .then(|| div().text_color(rgb(LOOP_BAR)).child("Metronome")),
-                ),
-            )
+            .children(top_bar)
+            .children(ruler(project, self.looping.as_ref(), playhead, width))
             .children(lanes(&self.editor, width))
             .children(
                 project
@@ -445,18 +862,22 @@ impl Render for Pathos {
                     .iter()
                     .map(|clip| clip_view(project, clip, Some(clip.id) == selected)),
             )
-            .children(self.looping.as_ref().into_iter().flat_map(|ticks| {
-                let lanes = layout::loop_rect(project, ticks);
-                // A bar above the lanes marks the loop where clips cover it.
-                let bar = Rect {
-                    y: STATUS_HEIGHT - 4.0,
-                    height: 4.0,
-                    ..lanes
-                };
-                [at(lanes).bg(rgba(LOOP)), at(bar).bg(rgb(LOOP_BAR))]
-            }))
+            .children(
+                self.looping
+                    .as_ref()
+                    .map(|ticks| at(layout::loop_rect(project, ticks)).bg(rgba(LOOP))),
+            )
             .children(selected.map(|id| piano_roll(project, id)))
-            .children(playhead)
+            .children(playhead.map(|x| {
+                at(Rect {
+                    x,
+                    y: TIMELINE_TOP,
+                    width: 1.0,
+                    height: project.track_count() as f32 * LANE_HEIGHT,
+                })
+                .bg(rgb(PLAYHEAD))
+            }))
+            .child(footer(status, width, height))
     }
 }
 
@@ -539,7 +960,7 @@ fn lanes(editor: &Editor, width: f32) -> Vec<Div> {
     elements.extend((0..=beats).map(|beat| {
         at(Rect {
             x: HEADER_WIDTH + beat as f32 * BEAT_WIDTH,
-            y: STATUS_HEIGHT,
+            y: TIMELINE_TOP,
             width: 1.0,
             height: project.track_count() as f32 * LANE_HEIGHT,
         })

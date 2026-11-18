@@ -54,11 +54,6 @@ pub fn fraction(level: f32) -> f32 {
     ((decibels - FLOOR_DECIBELS) / (CEILING_DECIBELS - FLOOR_DECIBELS)).min(1.0)
 }
 
-/// Whether `level` is past full scale, where a file or a device clips it.
-pub fn clips(level: f32) -> bool {
-    level > 1.0
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,11 +109,5 @@ mod tests {
         assert!(close(fraction(0.5), (60.0 - 6.0206) / 66.0));
         assert_eq!(fraction(2.0), 1.0);
         assert_eq!(fraction(4.0), 1.0);
-    }
-
-    #[test]
-    fn a_level_past_full_scale_clips() {
-        assert!(!clips(1.0));
-        assert!(clips(1.001));
     }
 }
