@@ -1,7 +1,7 @@
 ---
 number: 22
 title: Loop playback over a range held by the window, not the project
-status: proposed
+status: accepted
 date: 2026-11-18
 ---
 
