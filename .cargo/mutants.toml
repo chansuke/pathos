@@ -9,7 +9,7 @@ exclude_globs = [
 exclude_re = [
     # When `tick` equals the next change's tick, both branches stop at `tick`,
     # so `>=` computes the same time as `>`.
-    "replace > with >= in Project::tick_to_micros",
+    "replace > with >= in micros_times_ppq",
     # The metronome's loop in `Score::render` reaches `end` only on a beat
     # that starts there, whose click adds nothing to the block, so `<=`
     # renders the same frames.
