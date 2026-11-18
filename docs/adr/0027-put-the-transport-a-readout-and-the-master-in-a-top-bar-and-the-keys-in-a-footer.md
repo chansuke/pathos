@@ -1,7 +1,7 @@
 ---
 number: 27
 title: Put the transport, a readout and the master in a top bar, and the keys in a footer
-status: proposed
+status: accepted
 date: 2026-11-19
 ---
 
