@@ -1,7 +1,7 @@
 ---
 number: 23
 title: Click a metronome in the score, on the beats of the tempo map
-status: proposed
+status: accepted
 date: 2026-11-18
 ---
 
