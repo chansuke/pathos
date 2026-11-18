@@ -20,3 +20,4 @@
 * [20. Give each track a volume and a mute](0020-give-each-track-a-volume-and-a-mute.md)
 * [21. Solo tracks in the schedule and pan them in a stereo render](0021-solo-tracks-in-the-schedule-and-pan-them-in-a-stereo-render.md)
 * [22. Loop playback over a range held by the window, not the project](0022-loop-playback-over-a-range-held-by-the-window-not-the-project.md)
+* [23. Click a metronome in the score, on the beats of the tempo map](0023-click-a-metronome-in-the-score-on-the-beats-of-the-tempo-map.md)
