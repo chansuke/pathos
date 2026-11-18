@@ -9,10 +9,14 @@ use pathos_core::{Clip, MAX_TICK, Note, PPQ, Project, Tick};
 
 /// The height of the status line above the timeline.
 pub const STATUS_HEIGHT: f32 = 28.0;
-/// The width of the track names left of the timeline and of the pitch names
+/// The width of the track headers left of the timeline and of the pitch names
 /// left of the piano roll.
-pub const HEADER_WIDTH: f32 = 112.0;
-pub const LANE_HEIGHT: f32 = 48.0;
+pub const HEADER_WIDTH: f32 = 240.0;
+pub const LANE_HEIGHT: f32 = 72.0;
+/// The space around the controls of a track header.
+const HEADER_PADDING: f32 = 12.0;
+/// The height of a row of controls in a track header.
+const CONTROL_HEIGHT: f32 = 22.0;
 pub const BEAT_WIDTH: f32 = 32.0;
 /// The gap between the last lane and the piano roll.
 pub const ROLL_GAP: f32 = 16.0;
@@ -90,21 +94,40 @@ pub fn lane_top(track: u64) -> f32 {
     STATUS_HEIGHT + track as f32 * LANE_HEIGHT
 }
 
-/// The mute button of a track, below its name.
-pub fn mute_rect(track: u64) -> Rect {
+/// The upper row of controls of a track header, beside its name.
+fn upper_row(track: u64) -> f32 {
+    lane_top(track) + (LANE_HEIGHT - 2.0 * CONTROL_HEIGHT) / 3.0
+}
+
+/// The lower row of controls of a track header.
+fn lower_row(track: u64) -> f32 {
+    lane_top(track) + LANE_HEIGHT - (LANE_HEIGHT - 2.0 * CONTROL_HEIGHT) / 3.0 - CONTROL_HEIGHT
+}
+
+/// The name of a track, in its upper row left of its buttons.
+pub fn name_rect(track: u64) -> Rect {
     Rect {
-        x: 6.0,
-        y: lane_top(track) + 26.0,
-        width: 16.0,
-        height: 16.0,
+        x: HEADER_PADDING,
+        y: upper_row(track),
+        width: mute_rect(track).x - 2.0 * HEADER_PADDING,
+        height: CONTROL_HEIGHT,
     }
 }
 
-/// The master volume, at the left of the status row, above the volumes of the
-/// tracks.
+/// The mute button of a track, left of its solo button.
+pub fn mute_rect(track: u64) -> Rect {
+    Rect {
+        x: solo_rect(track).x - 30.0,
+        ..solo_rect(track)
+    }
+}
+
+/// The master volume, at the left of the status row, in line with the
+/// volumes of the tracks.
 pub fn master_rect() -> Rect {
     Rect {
         y: 6.0,
+        height: 16.0,
         ..volume_rect(0)
     }
 }
@@ -120,31 +143,36 @@ pub fn meter_rect(channel: usize) -> Rect {
     }
 }
 
-/// The solo button of a track, right of its mute button.
+/// The solo button of a track, at the right of its upper row.
 pub fn solo_rect(track: u64) -> Rect {
     Rect {
-        x: 26.0,
-        ..mute_rect(track)
+        x: HEADER_WIDTH - HEADER_PADDING - 24.0,
+        y: upper_row(track),
+        width: 24.0,
+        height: CONTROL_HEIGHT,
     }
 }
 
-/// The volume of a track, right of its solo button.
+/// The volume of a track, right of its pan, reaching to the right of its
+/// lower row.
 pub fn volume_rect(track: u64) -> Rect {
+    let pan = pan_rect(track);
+    let x = pan.x + pan.width + 10.0;
     Rect {
-        x: 46.0,
-        y: lane_top(track) + 26.0,
-        width: HEADER_WIDTH - 48.0,
-        height: 16.0,
+        x,
+        y: pan.y,
+        width: HEADER_WIDTH - HEADER_PADDING - x,
+        height: CONTROL_HEIGHT,
     }
 }
 
-/// The pan of a track, right of its name.
+/// The pan of a track, at the left of its lower row.
 pub fn pan_rect(track: u64) -> Rect {
     Rect {
-        x: HEADER_WIDTH - 42.0,
-        y: lane_top(track) + 4.0,
-        width: 40.0,
-        height: 18.0,
+        x: HEADER_PADDING,
+        y: lower_row(track),
+        width: 56.0,
+        height: CONTROL_HEIGHT,
     }
 }
 
@@ -355,34 +383,60 @@ mod tests {
             assert_eq!(hit(&project, None, x, y), Hit::Solo { track });
             let (x, y) = center(pan_rect(track));
             assert_eq!(hit(&project, None, x, y), Hit::Pan { track });
-            let pan = pan_rect(track);
-            assert_eq!(
-                hit(&project, None, HEADER_WIDTH - 3.0, pan.y),
-                Hit::Pan { track }
-            );
-            assert_eq!(
-                hit(&project, None, pan.x - 1.0, pan.y),
-                Hit::Nothing,
-                "the name"
-            );
             let (x, y) = center(volume_rect(track));
             let volume = Hit::Volume {
                 fader: Fader::Track(track),
             };
             assert_eq!(hit(&project, None, x, y), volume);
-            // The volume reaches almost to the timeline; its first pixel is
-            // inside and the ones past its ends are not.
-            let rect = volume_rect(track);
+            let [name, mute, solo, pan, rect] = [
+                name_rect(track),
+                mute_rect(track),
+                solo_rect(track),
+                pan_rect(track),
+                volume_rect(track),
+            ];
+            // The name and the buttons share the upper row, the pan and the
+            // volume the lower one, all inside the lane and the header.
+            assert_eq!((name.y, mute.y), (solo.y, solo.y));
+            assert_eq!(pan.y, rect.y);
+            assert!(solo.y >= lane_top(track) && pan.y >= solo.y + solo.height);
+            assert!(pan.y + pan.height <= lane_top(track) + LANE_HEIGHT);
+            assert!(name.x + name.width < mute.x);
+            assert_eq!(
+                mute.x + mute.width + 6.0,
+                solo.x,
+                "the buttons side by side"
+            );
+            // The rows share the lane's spare height evenly above, between
+            // and below them.
+            let above = solo.y - lane_top(track);
+            let between = pan.y - (solo.y + solo.height);
+            let below = lane_top(track) + LANE_HEIGHT - (pan.y + pan.height);
+            assert!((between - above).abs() < 1e-3 && (below - above).abs() < 1e-3);
+            assert_eq!(solo.x + solo.width, rect.x + rect.width);
+            assert!(rect.x + rect.width < HEADER_WIDTH, "short of the timeline");
+            assert_eq!(
+                hit(&project, None, center(name).0, center(name).1),
+                Hit::Nothing
+            );
+            // The first pixel of a control is inside and the ones past its
+            // ends are not.
             assert_eq!(hit(&project, None, rect.x, rect.y), volume);
-            assert_eq!(hit(&project, None, HEADER_WIDTH - 3.0, y), volume);
+            assert_eq!(
+                hit(&project, None, rect.x - 1.0, y),
+                Hit::Nothing,
+                "between"
+            );
+            assert_eq!(hit(&project, None, pan.x + pan.width, y), Hit::Nothing);
+            assert_eq!(hit(&project, None, pan.x - 1.0, y), Hit::Nothing);
             assert_eq!(hit(&project, None, rect.x + rect.width, y), Hit::Nothing);
             assert_eq!(hit(&project, None, x, rect.y + rect.height), Hit::Nothing);
             assert_eq!(hit(&project, None, x, rect.y - 1.0), Hit::Nothing);
             assert_eq!(
-                hit(&project, None, 2.0, y),
-                Hit::Nothing,
-                "left of the button"
+                hit(&project, None, solo.x + solo.width, solo.y),
+                Hit::Nothing
             );
+            assert_eq!(hit(&project, None, mute.x - 1.0, mute.y), Hit::Nothing);
         }
         let below = lane_top(project.track_count()) + 30.0;
         assert_eq!(hit(&project, None, 30.0, below), Hit::Nothing);
