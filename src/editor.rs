@@ -116,6 +116,8 @@ pub struct Editor {
     selected: Option<u64>,
     drag: Option<Drag>,
     pointer: (f32, f32),
+    /// The width of the window, which places the master volume.
+    width: f32,
     /// Why the last edit was rejected, until the next edit is accepted.
     rejected: Option<EditError>,
 }
@@ -126,6 +128,11 @@ impl Editor {
             document,
             ..Editor::default()
         }
+    }
+
+    /// Follows the window to `width`.
+    pub fn resize(&mut self, width: f32) {
+        self.width = width;
     }
 
     pub fn document(&self) -> &Document {
@@ -226,7 +233,14 @@ impl Editor {
         match input {
             Input::Down { x, y, clicks } => {
                 self.pointer = (x, y);
-                match layout::hit(project, self.selected(), x, y) {
+                let hit = if layout::master_rect(self.width).contains(x, y) {
+                    Hit::Volume {
+                        fader: Fader::Master,
+                    }
+                } else {
+                    layout::hit(project, self.selected(), x, y)
+                };
+                match hit {
                     Hit::Lane { track, tick } if clicks == 2 => {
                         Some(Edit::Apply(Command::AddClip {
                             track,
@@ -656,7 +670,8 @@ mod tests {
     #[test]
     fn dragging_the_master_volume_is_heard_and_applies_one_edit_on_release() {
         let mut editor = with_clip();
-        let (x, y) = center(master_rect());
+        editor.resize(1200.0);
+        let (x, y) = center(master_rect(1200.0));
         editor.handle(Input::Down { x, y, clicks: 1 });
         editor.handle(Input::Move { x, y: y + 24.0 });
         // Six decibels down: a gain of 0.501.

@@ -7,8 +7,20 @@ use std::ops::Range;
 
 use pathos_core::{Clip, MAX_TICK, Note, PPQ, Project, Tick};
 
-/// The height of the status line above the timeline.
-pub const STATUS_HEIGHT: f32 = 28.0;
+/// The height of the bar at the top of the window, which holds the transport
+/// and the master volume (ADR 27).
+pub const TOP_BAR_HEIGHT: f32 = 52.0;
+/// The height of the ruler between the top bar and the lanes.
+pub const RULER_HEIGHT: f32 = 32.0;
+/// Where the lanes start.
+pub const TIMELINE_TOP: f32 = TOP_BAR_HEIGHT + RULER_HEIGHT;
+/// The height of the bar at the bottom of the window, which holds the keys
+/// and the status.
+pub const FOOTER_HEIGHT: f32 = 30.0;
+/// The width of the meter at the right of the top bar.
+pub const METER_WIDTH: f32 = 196.0;
+/// The space between the top bar's groups and its edges.
+const BAR_PADDING: f32 = 16.0;
 /// The width of the track headers left of the timeline and of the pitch names
 /// left of the piano roll.
 pub const HEADER_WIDTH: f32 = 240.0;
@@ -35,7 +47,7 @@ pub struct Rect {
 }
 
 impl Rect {
-    fn contains(&self, x: f32, y: f32) -> bool {
+    pub fn contains(&self, x: f32, y: f32) -> bool {
         self.x <= x && x < self.x + self.width && self.y <= y && y < self.y + self.height
     }
 }
@@ -91,7 +103,7 @@ pub enum Fader {
 }
 
 pub fn lane_top(track: u64) -> f32 {
-    STATUS_HEIGHT + track as f32 * LANE_HEIGHT
+    TIMELINE_TOP + track as f32 * LANE_HEIGHT
 }
 
 /// The upper row of controls of a track header, beside its name.
@@ -122,24 +134,77 @@ pub fn mute_rect(track: u64) -> Rect {
     }
 }
 
-/// The master volume, at the left of the status row, in line with the
-/// volumes of the tracks.
-pub fn master_rect() -> Rect {
+/// The button that returns to the start, first of the transport.
+pub fn home_rect() -> Rect {
     Rect {
-        y: 6.0,
-        height: 16.0,
-        ..volume_rect(0)
+        x: 232.0,
+        y: 10.0,
+        width: 44.0,
+        height: 32.0,
     }
 }
 
-/// The meter of `channel`, 0 for the left and 1 for the right, below the
-/// master volume (ADR 25).
-pub fn meter_rect(channel: usize) -> Rect {
-    let master = master_rect();
+/// The button that plays and stops, right of the one that returns to the
+/// start.
+pub fn play_rect() -> Rect {
+    let home = home_rect();
     Rect {
-        y: master.y + master.height + 1.0 + 3.0 * channel as f32,
-        height: 2.0,
-        ..master
+        x: home.x + home.width + 3.0,
+        width: 52.0,
+        ..home
+    }
+}
+
+/// The position, the time and the tempo, right of the transport.
+pub fn readout_rect() -> Rect {
+    let play = play_rect();
+    Rect {
+        x: play.x + play.width + 16.0,
+        y: 7.0,
+        width: 284.0,
+        height: 38.0,
+    }
+}
+
+/// The button that turns the loop on and off, right of the readout.
+pub fn loop_button_rect() -> Rect {
+    let readout = readout_rect();
+    Rect {
+        x: readout.x + readout.width + 16.0,
+        width: 84.0,
+        ..home_rect()
+    }
+}
+
+/// The button that turns the metronome on and off, right of the loop's.
+pub fn metronome_button_rect() -> Rect {
+    let toggle = loop_button_rect();
+    Rect {
+        x: toggle.x + toggle.width + 6.0,
+        width: 128.0,
+        ..toggle
+    }
+}
+
+/// The master volume in a window `width` wide, under its name at the right
+/// of the top bar, left of the meter (ADR 24).
+pub fn master_rect(width: f32) -> Rect {
+    Rect {
+        x: meter_rect(width, 0).x - 14.0 - 64.0,
+        y: 24.0,
+        width: 64.0,
+        height: 22.0,
+    }
+}
+
+/// The meter of `channel`, 0 for the left and 1 for the right, at the right
+/// of the top bar (ADR 25). Its scale lies below the right one.
+pub fn meter_rect(width: f32, channel: usize) -> Rect {
+    Rect {
+        x: width - BAR_PADDING - METER_WIDTH,
+        y: 12.0 + 9.0 * channel as f32,
+        width: METER_WIDTH,
+        height: 6.0,
     }
 }
 
@@ -180,7 +245,7 @@ pub fn pan_rect(track: u64) -> Rect {
 pub fn loop_rect(project: &Project, ticks: &Range<Tick>) -> Rect {
     Rect {
         x: HEADER_WIDTH + ticks_to_width(ticks.start, BEAT_WIDTH),
-        y: STATUS_HEIGHT,
+        y: TIMELINE_TOP,
         width: ticks_to_width(ticks.end - ticks.start, BEAT_WIDTH),
         height: project.track_count() as f32 * LANE_HEIGHT,
     }
@@ -225,9 +290,13 @@ pub fn roll_width(clip: &Clip) -> f32 {
     ticks_to_width(clip.length, ROLL_BEAT_WIDTH)
 }
 
-/// Where the playhead is drawn when frame `frame` at `sample_rate` plays: on
-/// the last tick that starts at or before it.
+/// Where the playhead is drawn when frame `frame` at `sample_rate` plays.
 pub fn playhead_x(project: &Project, sample_rate: NonZeroU32, frame: u64) -> f32 {
+    HEADER_WIDTH + ticks_to_width(tick_at(project, sample_rate, frame), BEAT_WIDTH)
+}
+
+/// The last tick that starts at or before frame `frame` at `sample_rate`.
+pub fn tick_at(project: &Project, sample_rate: NonZeroU32, frame: u64) -> Tick {
     let at = |tick: Tick| project.tick_to_micros(tick) * u128::from(sample_rate.get()) / 1_000_000;
     let (mut low, mut high) = (0, MAX_TICK);
     while low < high {
@@ -238,16 +307,11 @@ pub fn playhead_x(project: &Project, sample_rate: NonZeroU32, frame: u64) -> f32
             high = middle - 1;
         }
     }
-    HEADER_WIDTH + ticks_to_width(low, BEAT_WIDTH)
+    low
 }
 
 /// What lies under `(x, y)`, with the piano roll showing the clip `selected`.
 pub fn hit(project: &Project, selected: Option<u64>, x: f32, y: f32) -> Hit {
-    if master_rect().contains(x, y) {
-        return Hit::Volume {
-            fader: Fader::Master,
-        };
-    }
     if x < HEADER_WIDTH {
         return match track_at(project, y) {
             Some(track) if mute_rect(track).contains(x, y) => Hit::Mute { track },
@@ -299,7 +363,7 @@ pub fn hit(project: &Project, selected: Option<u64>, x: f32, y: f32) -> Hit {
 
 /// The track whose lane spans `y`.
 pub fn track_at(project: &Project, y: f32) -> Option<u64> {
-    let lane = (y - STATUS_HEIGHT) / LANE_HEIGHT;
+    let lane = (y - TIMELINE_TOP) / LANE_HEIGHT;
     (lane >= 0.0 && lane < project.track_count() as f32).then_some(lane as u64)
 }
 
@@ -443,48 +507,65 @@ mod tests {
     }
 
     #[test]
-    fn the_master_volume_sits_in_the_status_row_above_the_tracks() {
-        let project = project();
-        let master = Hit::Volume {
-            fader: Fader::Master,
-        };
-        let rect = master_rect();
-        let (x, y) = center(rect);
-        assert_eq!(hit(&project, None, x, y), master);
-        assert_eq!(hit(&project, None, rect.x, rect.y), master);
-        assert_eq!(hit(&project, None, x, rect.y - 1.0), Hit::Nothing);
-        assert_eq!(hit(&project, None, x, rect.y + rect.height), Hit::Nothing);
+    fn the_top_bar_holds_the_transport_then_the_toggles_in_a_row() {
+        let row = [
+            home_rect(),
+            play_rect(),
+            readout_rect(),
+            loop_button_rect(),
+            metronome_button_rect(),
+        ];
+        assert!(row[0].x >= HEADER_WIDTH - 8.0, "after the name of the file");
+        for pair in row.windows(2) {
+            assert!(pair[0].x + pair[0].width < pair[1].x, "{pair:?}");
+        }
+        assert_eq!(play_rect().x, home_rect().x + home_rect().width + 3.0);
+        assert!(play_rect().width > home_rect().width, "play is the wider");
+        // Wide enough for their labels and keys.
+        assert!(loop_button_rect().width >= 80.0);
+        assert!(metronome_button_rect().width >= 120.0);
         assert_eq!(
-            hit(&project, None, rect.x - 1.0, y),
-            Hit::Nothing,
-            "its name"
+            lane_top(0),
+            TOP_BAR_HEIGHT + RULER_HEIGHT,
+            "the ruler, then the lanes"
         );
-        assert_eq!(
-            hit(&project, None, rect.x + rect.width, y),
-            Hit::Nothing,
-            "the status"
-        );
-        assert!(rect.y + rect.height <= STATUS_HEIGHT, "above the lanes");
-        assert_eq!(
-            (rect.x, rect.width),
-            (volume_rect(0).x, volume_rect(0).width)
-        );
+        assert_eq!(metronome_button_rect().y, loop_button_rect().y);
+        for rect in row {
+            assert!(
+                rect.y > 0.0 && rect.y + rect.height < TOP_BAR_HEIGHT,
+                "{rect:?}"
+            );
+            let middle = rect.y + rect.height / 2.0;
+            assert_eq!(middle, TOP_BAR_HEIGHT / 2.0, "centered: {rect:?}");
+        }
     }
 
     #[test]
-    fn the_meters_lie_under_the_master_volume_within_the_status_row() {
-        let master = master_rect();
-        let [left, right] = [meter_rect(0), meter_rect(1)];
-        // A pixel apart, so that the bars read as two.
-        assert_eq!(left.y, master.y + master.height + 1.0, "below the master");
+    fn the_master_volume_and_the_meter_sit_at_the_right_of_the_top_bar() {
+        let width = 1200.0;
+        let master = master_rect(width);
+        let [left, right] = [meter_rect(width, 0), meter_rect(width, 1)];
+        assert_eq!(
+            left.x + left.width,
+            width - BAR_PADDING,
+            "at the right edge"
+        );
+        assert_eq!(master.x + master.width + 14.0, left.x);
+        assert!(metronome_button_rect().x + metronome_button_rect().width < master.x);
+        assert_eq!((right.x, right.width), (left.x, left.width));
         assert_eq!(
             right.y,
-            left.y + left.height + 1.0,
+            left.y + left.height + 3.0,
             "the right under the left"
         );
-        assert!(right.y + right.height <= STATUS_HEIGHT, "above the lanes");
-        assert_eq!((left.x, left.width), (master.x, master.width));
-        assert_eq!((right.x, right.width), (master.x, master.width));
+        assert!(
+            right.y + right.height + 12.0 <= TOP_BAR_HEIGHT,
+            "room for the scale"
+        );
+        assert!(master.y + master.height < TOP_BAR_HEIGHT);
+        // A wider window moves them right by as much.
+        assert_eq!(master_rect(width + 100.0).x, master.x + 100.0);
+        assert_eq!(meter_rect(width + 100.0, 1).x, right.x + 100.0);
     }
 
     #[test]
@@ -548,7 +629,7 @@ mod tests {
             Hit::Lane { track: 1, tick: 30 }
         );
         assert_eq!(hit(&project, None, x, lane_top(2)), Hit::Nothing);
-        assert_eq!(hit(&project, None, x, STATUS_HEIGHT - 1.0), Hit::Nothing);
+        assert_eq!(hit(&project, None, x, TIMELINE_TOP - 1.0), Hit::Nothing);
     }
 
     #[test]
