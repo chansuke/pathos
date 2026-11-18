@@ -20,8 +20,9 @@ use pathos_render::Score;
 use editor::{Editor, Input, Key};
 use file::Saved;
 use layout::{
-    BEAT_WIDTH, FOOTER_HEIGHT, Fader, HEADER_WIDTH, HIGHEST_PITCH, LANE_HEIGHT, LOWEST_PITCH,
-    ROLL_BEAT_WIDTH, ROW_HEIGHT, RULER_HEIGHT, Rect, TIMELINE_TOP, TOP_BAR_HEIGHT,
+    BEAT_WIDTH, FOOTER_HEIGHT, Fader, HEADER_WIDTH, HIGHEST_PITCH, KEYBOARD_WIDTH, LANE_HEIGHT,
+    LOWEST_PITCH, ROLL_BEAT_WIDTH, ROLL_RULER_HEIGHT, ROW_HEIGHT, RULER_HEIGHT, Rect, TIMELINE_TOP,
+    TOP_BAR_HEIGHT, WINDOW_HEIGHT, WINDOW_WIDTH,
 };
 use meter::Meter;
 
@@ -30,12 +31,16 @@ const BACKGROUND: u32 = 0x131518;
 const PANEL: u32 = 0x1a1d21;
 const LANE: u32 = 0x17191d;
 const BLACK_KEY_ROW: u32 = 0x16181b;
+const WHITE_KEY_ROW: u32 = 0x1d2024;
+const WHITE_KEY: u32 = 0xd4d8de;
+/// The line between two white keys; the one below a C or an F is darker.
+const WHITE_KEY_LINE: u32 = 0xc3c8cf;
+const BLACK_KEY: u32 = 0x23272c;
 const GRID: u32 = 0x2a2e34;
 /// The line of each beat, fainter than the line of a bar.
 const BEAT_LINE: u32 = 0x1e2125;
 const CONTROL: u32 = 0x202328;
 const CONTROL_BORDER: u32 = 0x343941;
-const NOTE: u32 = 0xe8c547;
 const TEXT: u32 = 0xe6e8eb;
 /// Labels and values that are read less often than names.
 const SUBTLE_TEXT: u32 = 0x8a919b;
@@ -867,7 +872,7 @@ impl Render for Pathos {
                     .as_ref()
                     .map(|ticks| at(layout::loop_rect(project, ticks)).bg(rgba(LOOP))),
             )
-            .children(selected.map(|id| piano_roll(project, id)))
+            .children(selected.map(|id| piano_roll(project, id, width)))
             .children(playhead.map(|x| {
                 at(Rect {
                     x,
@@ -1118,59 +1123,142 @@ fn thumbnail(project: &Project, clip: &Clip, color: Rgba) -> Vec<Div> {
         .collect()
 }
 
-/// The piano roll of the clip `id`: a row per pitch, a line per beat and the
-/// notes of the clip.
-fn piano_roll(project: &Project, id: u64) -> Div {
+/// The piano roll of the clip `id`: a ruler naming the clip and numbering its
+/// beats, a keyboard, a row per pitch, a line per sixteenth, stronger on a
+/// beat, and the notes in the color of the clip's track (ADR 28).
+fn piano_roll(project: &Project, id: u64, width: f32) -> Div {
     let Some(clip) = project.clips().iter().find(|clip| clip.id == id) else {
         return div();
     };
     let top = layout::roll_top(project);
-    let width = layout::roll_width(clip);
-    let rows = (LOWEST_PITCH..=HIGHEST_PITCH).map(|pitch| {
-        let y = layout::row_top(project, pitch);
-        let black = matches!(pitch % 12, 1 | 3 | 6 | 8 | 10);
-        let label = (pitch % 12 == 0).then(|| format!("C{}", i32::from(pitch / 12) - 1));
-        [
+    let ruler = top - ROLL_RULER_HEIGHT;
+    let roll_width = layout::roll_width(clip);
+    let bar = clip.start / (4 * PPQ) + 1;
+    let keyboard = HEADER_WIDTH - KEYBOARD_WIDTH;
+    let mut elements = vec![
+        at(Rect {
+            x: 0.0,
+            y: ruler,
+            width,
+            height: ROLL_RULER_HEIGHT + layout::roll_height(),
+        })
+        .bg(rgb(PANEL))
+        .border_t_1()
+        .border_color(rgb(GRID)),
+        at(Rect {
+            x: 12.0,
+            y: ruler,
+            width: keyboard - 12.0,
+            height: ROLL_RULER_HEIGHT,
+        })
+        .flex()
+        .items_center()
+        .gap_2()
+        .child(
+            div()
+                .flex_none()
+                .size(px(8.0))
+                .rounded(px(2.0))
+                .bg(track_color(clip.track, 0xff)),
+        )
+        .child(
+            div()
+                .truncate()
+                .child(format!("Track {} / bar {bar}", clip.track + 1)),
+        ),
+    ];
+    for beat in 0..clip.length.div_ceil(PPQ) {
+        let x = HEADER_WIDTH + beat as f32 * ROLL_BEAT_WIDTH;
+        elements.push(
             at(Rect {
-                x: 0.0,
-                y: y - 3.0,
-                width: HEADER_WIDTH - 8.0,
-                height: ROW_HEIGHT + 6.0,
+                x,
+                y: ruler,
+                width: ROLL_BEAT_WIDTH,
+                height: ROLL_RULER_HEIGHT,
             })
             .flex()
-            .justify_end()
-            .children(label),
-            at(Rect {
-                x: HEADER_WIDTH,
-                y,
-                width,
-                height: ROW_HEIGHT,
-            })
-            .bg(rgb(if black { BLACK_KEY_ROW } else { LANE })),
-        ]
-    });
-    let beats = (0..=clip.length / PPQ).map(|beat| {
-        at(Rect {
-            x: HEADER_WIDTH + beat as f32 * ROLL_BEAT_WIDTH,
-            y: top,
-            width: 1.0,
-            height: layout::roll_height(),
+            .items_center()
+            .pl(px(6.0))
+            .border_l_1()
+            .border_color(rgb(CONTROL_BORDER))
+            .text_size(px(10.0))
+            .text_color(rgb(SUBTLE_TEXT))
+            .child(readout::beat_label(clip.start + beat * PPQ)),
+        );
+    }
+    for pitch in LOWEST_PITCH..=HIGHEST_PITCH {
+        let y = layout::row_top(project, pitch);
+        let black = matches!(pitch % 12, 1 | 3 | 6 | 8 | 10);
+        let row = at(Rect {
+            x: HEADER_WIDTH,
+            y,
+            width: roll_width,
+            height: ROW_HEIGHT,
         })
-        .bg(rgb(GRID))
-    });
-    let notes = project
-        .notes(id)
-        .filter_map(|note| layout::note_rect(project, note))
-        .map(|rect| {
-            at(rect)
-                .bg(rgb(NOTE))
-                .border_1()
-                .border_color(rgb(BACKGROUND))
+        .bg(rgb(if black { BLACK_KEY_ROW } else { WHITE_KEY_ROW }));
+        elements.push(if pitch % 12 == 0 {
+            row.border_b_1().border_color(rgb(GRID))
+        } else {
+            row
         });
-    div()
-        .children(rows.flatten())
-        .children(beats)
-        .children(notes)
+        let key = Rect {
+            x: keyboard,
+            y,
+            width: if black {
+                KEYBOARD_WIDTH * 0.6
+            } else {
+                KEYBOARD_WIDTH
+            },
+            height: ROW_HEIGHT,
+        };
+        elements.push(if black {
+            at(key).rounded_r(px(2.0)).bg(rgb(BLACK_KEY))
+        } else {
+            at(key)
+                .flex()
+                .items_center()
+                .justify_end()
+                .pr(px(4.0))
+                .bg(rgb(WHITE_KEY))
+                .border_b_1()
+                .border_color(rgb(if matches!(pitch % 12, 0 | 5) {
+                    SUBTLE_TEXT
+                } else {
+                    WHITE_KEY_LINE
+                }))
+                .text_size(px(7.0))
+                .text_color(rgb(BLACK_KEY))
+                .children((pitch % 12 == 0).then(|| format!("C{}", i32::from(pitch / 12) - 1)))
+        });
+    }
+    for sixteenth in 0..=clip.length / (PPQ / 4) {
+        elements.push(
+            at(Rect {
+                x: HEADER_WIDTH + sixteenth as f32 * ROLL_BEAT_WIDTH / 4.0,
+                y: top,
+                width: 1.0,
+                height: layout::roll_height(),
+            })
+            .bg(rgb(if sixteenth % 4 == 0 {
+                CONTROL_BORDER
+            } else {
+                GRID
+            })),
+        );
+    }
+    elements.extend(
+        project
+            .notes(id)
+            .filter_map(|note| layout::note_rect(project, note))
+            .map(|rect| {
+                at(rect)
+                    .rounded(px(2.0))
+                    .bg(track_color(clip.track, 0xff))
+                    .border_1()
+                    .border_color(rgba(0x0000_0059))
+            }),
+    );
+    div().children(elements)
 }
 
 /// An element placed at `rect` of its parent.
@@ -1199,7 +1287,7 @@ fn key(event: &KeyDownEvent) -> Option<Key> {
 
 fn main() {
     Application::new().run(|cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
+        let bounds = Bounds::centered(None, size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
