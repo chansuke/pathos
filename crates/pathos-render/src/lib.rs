@@ -11,8 +11,7 @@ use std::num::NonZeroU32;
 use std::ops::Range;
 
 use pathos_core::{
-    CENTER_PAN, Event, MAX_PAN, MAX_TICK, PPQ, Project, TempoChange, Tick, Track, UNITY_VOLUME,
-    sample_of,
+    CENTER_PAN, Event, MAX_PAN, MAX_TICK, PPQ, Project, TempoMap, Tick, Track, UNITY_VOLUME,
 };
 
 pub mod wav;
@@ -77,7 +76,7 @@ pub struct Score {
     /// The frames that playback repeats, if any (ADR 22).
     looped: Option<Range<u64>>,
     /// The project's tempo changes, which place the beats.
-    tempo: Vec<TempoChange>,
+    tempo: TempoMap,
     rate: u32,
     /// Whether a click sounds on every beat (ADR 23).
     metronome: bool,
@@ -155,7 +154,7 @@ impl Score {
             ramp: (rate / 200).max(1) as f32,
             notes,
             looped: None,
-            tempo: project.tempo().to_vec(),
+            tempo: project.tempo_map(),
             rate,
             metronome: false,
         }
@@ -183,7 +182,7 @@ impl Score {
     }
 
     fn frame_of(&self, tick: Tick) -> u128 {
-        sample_of(&self.tempo, self.rate.into(), tick)
+        self.tempo.sample_of(self.rate.into(), tick)
     }
 
     /// The click of `beat`, which starts on its frame and lasts 20 ms, or up
@@ -241,17 +240,23 @@ impl Score {
             note.add(start, out, self.ramp);
         }
         if self.metronome {
-            // Each turn moves to a later frame, so a block takes at most as
-            // many turns as it has frames, however close the beats are.
-            let mut frame = start;
-            while frame < end {
-                let beat = self.beat_at(frame);
-                self.click(beat).add(start, out, self.ramp);
-                if beat == LAST_BEAT {
-                    break;
-                }
-                frame = self.frame_of((beat + 1) * PPQ);
+            self.add_clicks(start, out);
+        }
+    }
+
+    /// Adds the clicks that sound in `out`, which holds the frames from
+    /// `start` on. Each turn moves to a later frame, so a block takes at most
+    /// as many turns as it has frames, however close the beats are.
+    fn add_clicks(&self, start: u128, out: &mut [Frame]) {
+        let end = start + out.len() as u128;
+        let mut frame = start;
+        while frame < end {
+            let beat = self.beat_at(frame);
+            self.click(beat).add(start, out, self.ramp);
+            if beat == LAST_BEAT {
+                break;
             }
+            frame = self.frame_of((beat + 1) * PPQ);
         }
     }
 }

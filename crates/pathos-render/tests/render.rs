@@ -516,7 +516,7 @@ fn the_metronome_ends_at_the_last_tick() {
     let rate = NonZeroU32::new(48_000).unwrap();
     let project = project(&[]);
     let score = Score::new(&project, rate).with_metronome();
-    let last = project.sample_of(48_000, MAX_TICK / PPQ * PPQ) as u64;
+    let last = project.tempo_map().sample_of(48_000, MAX_TICK / PPQ * PPQ) as u64;
     let frames = play(&score, last - 24_000, 60_000);
     let sounding = sounding(&frames);
     assert!(sounding[0] && sounding[24_000], "the last two beats click");
@@ -570,4 +570,34 @@ fn the_metronome_clicks_at_its_pitches() {
             .count()
     };
     assert_eq!((falls(0), falls(1)), (35, 18));
+}
+
+/// The last second of an hour-long note above the rate, hashed bit for bit.
+/// Such a note advances more than a whole cycle each frame, and only the
+/// fraction may enter its phase, or the phase loses bits as the note goes on.
+#[test]
+fn a_long_note_above_the_rate_is_the_same_everywhere() {
+    const HOUR: u64 = 3600 * SECOND;
+    let mut history = History::default();
+    for command in [
+        Command::AddTrack,
+        Command::AddClip {
+            track: 0,
+            start: 0,
+            length: HOUR,
+        },
+        Command::AddNote {
+            id: 0,
+            start: 0,
+            length: HOUR,
+            pitch: 127,
+            velocity: 100,
+        },
+    ] {
+        history.edit(Edit::Apply(command)).unwrap();
+    }
+    let rate = NonZeroU32::new(8000).unwrap();
+    let last = play(&Score::new(history.present(), rate), 3599 * 8000, 8000);
+    let hash = fnv1a(&last.concat());
+    assert_eq!(hash, 0x99f8_febd_fd0a_58f5, "render hash {hash:#018x}");
 }

@@ -15,4 +15,4 @@ pub use project::{
     CENTER_PAN, Clip, Command, EditError, MAX_PAN, MAX_PITCH, MAX_TICK, MAX_US_PER_QUARTER,
     MAX_VELOCITY, MAX_VOLUME, Note, PPQ, Project, TempoChange, Tick, Track, UNITY_VOLUME,
 };
-pub use schedule::{Event, sample_of};
+pub use schedule::{Event, TempoMap};
