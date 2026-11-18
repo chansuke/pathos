@@ -12,6 +12,8 @@ or the latest message at the bottom. Use `Cmd` instead of `Ctrl` on macOS.
   deletes it.
 - A click in the piano roll adds a sixteenth note, and a click on a note
   removes it.
+- The piano roll shows a keyboard from C2 to C6 at its left and numbers the
+  beats of the clip above it; its notes take the color of the clip's track.
 - `Ctrl-Z` and `Ctrl-Shift-Z` undo and redo.
 
 ## Mixing
