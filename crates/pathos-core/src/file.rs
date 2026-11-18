@@ -53,6 +53,7 @@ impl fmt::Display for Edit {
                     write!(f, "unsolo-track {track}")
                 }
                 Command::SetTrackPan { track, pan } => write!(f, "set-track-pan {track} {pan}"),
+                Command::SetMasterVolume { volume } => write!(f, "set-master-volume {volume}"),
             },
         }
     }
@@ -121,6 +122,7 @@ impl FromStr for Edit {
             ("solo-track", &[track]) => Command::SetTrackSolo { track, solo: true },
             ("unsolo-track", &[track]) => Command::SetTrackSolo { track, solo: false },
             ("set-track-pan", &[track, pan]) => Command::SetTrackPan { track, pan },
+            ("set-master-volume", &[volume]) => Command::SetMasterVolume { volume },
             _ => return Err(UnrecognizedEdit),
         };
         Ok(Edit::Apply(command))

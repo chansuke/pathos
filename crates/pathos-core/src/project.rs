@@ -172,6 +172,9 @@ pub enum Command {
         track: u64,
         pan: u64,
     },
+    SetMasterVolume {
+        volume: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -234,6 +237,9 @@ pub struct Project {
     /// index, ordered by index. The model keeps every track in a list; keeping
     /// the count a plain number lets the Kani harnesses try any count.
     mixed: Vec<(u64, Track)>,
+    /// The gain of every note in thousandths, as a track's volume is
+    /// (ADR 24).
+    master_volume: u16,
     /// Ordered by tick, starting at tick 0.
     tempo: Vec<TempoChange>,
     /// Ordered by id.
@@ -250,6 +256,7 @@ impl Default for Project {
         Project {
             track_count: 0,
             mixed: Vec::new(),
+            master_volume: UNITY_VOLUME,
             tempo: vec![TempoChange {
                 tick: 0,
                 us_per_quarter: 500_000,
@@ -276,6 +283,10 @@ impl Project {
             Ok(at) => self.mixed[at].1,
             Err(_) => Track::default(),
         })
+    }
+
+    pub fn master_volume(&self) -> u16 {
+        self.master_volume
     }
 
     fn mixed_index(&self, track: u64) -> Result<usize, usize> {
@@ -549,6 +560,12 @@ impl Project {
                     .filter(|pan| *pan <= MAX_PAN)
                     .ok_or(EditError::InvalidPan)?;
                 next.set_track(track, Track { pan, ..settings });
+            }
+            Command::SetMasterVolume { volume } => {
+                next.master_volume = u16::try_from(volume)
+                    .ok()
+                    .filter(|volume| *volume <= MAX_VOLUME)
+                    .ok_or(EditError::InvalidVolume)?;
             }
         }
         Ok((next, next_clip_id))
