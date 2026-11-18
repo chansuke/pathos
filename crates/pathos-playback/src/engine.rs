@@ -2,7 +2,7 @@
 //! newest score, follow the transport and render the frames (ADR 18).
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use pathos_render::{Frame, Score};
 
@@ -15,7 +15,8 @@ const CHUNK: usize = 4096;
 const NO_SEEK: u64 = u64::MAX;
 
 /// Play, stop and seek, set by the UI thread and followed by the audio thread
-/// at the start of each block, and the frame the audio thread has reached.
+/// at the start of each block, and what the audio thread reports back: the
+/// frame it has reached and the meter.
 #[derive(Debug)]
 pub struct Transport {
     playing: AtomicBool,
@@ -23,6 +24,10 @@ pub struct Transport {
     /// earlier one the audio thread has not yet followed.
     seek: AtomicU64,
     position: AtomicU64,
+    /// The bits of the loudest sample of each channel of the song since the
+    /// UI thread last took them (ADR 25). The bits of non-negative floats are
+    /// in the order of their values, so the larger bits are the louder peak.
+    peaks: [AtomicU32; 2],
 }
 
 impl Default for Transport {
@@ -31,6 +36,7 @@ impl Default for Transport {
             playing: AtomicBool::new(false),
             seek: AtomicU64::new(NO_SEEK),
             position: AtomicU64::new(0),
+            peaks: [AtomicU32::new(0), AtomicU32::new(0)],
         }
     }
 }
@@ -55,6 +61,27 @@ impl Transport {
     /// The frame that plays next, as of the last block.
     pub fn position(&self) -> u64 {
         self.position.load(Ordering::Relaxed)
+    }
+
+    /// The loudest sample of each channel of the song played since the last
+    /// call, leaving silence for the next one (ADR 25).
+    pub fn take_peaks(&self) -> Frame {
+        self.peaks
+            .each_ref()
+            .map(|peak| f32::from_bits(peak.swap(0, Ordering::Relaxed)))
+    }
+
+    /// Raises the peaks to the loudest sample of each channel of `frames`.
+    fn meter(&self, frames: &[Frame]) {
+        let mut loudest = [0.0f32; 2];
+        for frame in frames {
+            for (loudest, sample) in loudest.iter_mut().zip(frame) {
+                *loudest = loudest.max(sample.abs());
+            }
+        }
+        for (peak, loudest) in self.peaks.iter().zip(loudest) {
+            peak.fetch_max(loudest.to_bits(), Ordering::Relaxed);
+        }
     }
 }
 
@@ -104,7 +131,10 @@ impl Engine {
                     let (block, rest) = out.split_at_mut(count * channels);
                     out = rest;
                     let frames = &mut self.frames[..count];
-                    score.render(self.position, frames);
+                    // The meter shows the song, not the metronome (ADR 25).
+                    score.render_song(self.position, frames);
+                    self.transport.meter(frames);
+                    score.add_clicks(self.position, frames);
                     for (out, &[left, right]) in block.chunks_mut(channels).zip(frames.iter()) {
                         match out {
                             [mono] => *mono = (left + right) * 0.5,

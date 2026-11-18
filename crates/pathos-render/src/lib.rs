@@ -234,6 +234,12 @@ impl Score {
     /// render of the whole. It does not allocate, so it can run on the audio
     /// thread.
     pub fn render(&self, start: u64, out: &mut [Frame]) {
+        self.render_song(start, out);
+        self.add_clicks(start, out);
+    }
+
+    /// [`Score::render`] without the metronome: the notes alone.
+    pub fn render_song(&self, start: u64, out: &mut [Frame]) {
         out.fill([0.0; 2]);
         let start = u128::from(start);
         let end = start + out.len() as u128;
@@ -243,15 +249,17 @@ impl Score {
             }
             note.add(start, out, self.ramp);
         }
-        if self.metronome {
-            self.add_clicks(start, out);
-        }
     }
 
-    /// Adds the clicks that sound in `out`, which holds the frames from
-    /// `start` on. Each turn moves to a later frame, so a block takes at most
-    /// as many turns as it has frames, however close the beats are.
-    fn add_clicks(&self, start: u128, out: &mut [Frame]) {
+    /// Adds the metronome's clicks that sound in `out`, which holds the frames
+    /// from `start` on, if the metronome is on. Each turn moves to a later
+    /// frame, so a block takes at most as many turns as it has frames,
+    /// however close the beats are.
+    pub fn add_clicks(&self, start: u64, out: &mut [Frame]) {
+        if !self.metronome {
+            return;
+        }
+        let start = u128::from(start);
         let end = start + out.len() as u128;
         let mut frame = start;
         while frame < end {
