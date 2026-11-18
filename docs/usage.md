@@ -1,7 +1,8 @@
 # Usage
 
-The window shows a timeline of tracks and MIDI clips and a piano roll for the
-selected clip. Use `Cmd` instead of `Ctrl` on macOS.
+The window shows a bar of transport controls at the top, a timeline of tracks
+and MIDI clips under a ruler, a piano roll for the selected clip, and the keys
+or the latest message at the bottom. Use `Cmd` instead of `Ctrl` on macOS.
 
 ## Editing
 
@@ -15,23 +16,30 @@ selected clip. Use `Cmd` instead of `Ctrl` on macOS.
 
 ## Mixing
 
+- Each track has a color, shown at the left of its header and on its clips. The
+  clips of a muted track are fainter.
 - `M` in a track's header mutes it and `S` solos it.
 - Dragging the volume up or down changes it by a quarter decibel a pixel, and
   dragging the pan (`C`, `L` or `R`) left or right moves the track between the
   channels. A double click returns either to its default. Both are heard while
   they are dragged.
-- `Master` at the left of the status row is the volume of the whole song,
+- `Master` at the right of the top bar is the volume of the whole song,
   dragged and reset like a track's volume. It does not change the metronome.
-- The two bars under it meter the left and right channel of the song during
-  playback, from -60 dB to +6 dB, and turn red past full scale.
+- The two bars beside it meter the left and right channel of the song during
+  playback, from -60 dB to +6 dB: green up to -6 dB, yellow up to full scale
+  and red past it.
 
 ## Playback
 
-- `Space` plays and stops, and `Home` returns to the start. Playback matches
-  the offline render sample for sample.
-- `L` loops the selected clip, or every clip when none is selected, and stops
-  looping when a loop is on. The loop is not saved in the project.
-- `K` turns the metronome on and off. It clicks on every beat during playback,
+- `Space` or the play button plays and stops, and `Home` or the button before
+  it returns to the start. Playback matches the offline render sample for
+  sample.
+- The top bar shows where the playhead is, as bar, beat and sixteenth, the
+  time from the start, and the tempo there.
+- `L` or the `Loop` button loops the selected clip, or every clip when none is
+  selected, and stops looping when a loop is on. The ruler marks the loop. The
+  loop is not saved in the project.
+- `K` or the `Metronome` button turns the metronome on and off. It clicks on every beat during playback,
   higher on the first beat of each bar, and is not in a rendered file.
 
 ## Files
