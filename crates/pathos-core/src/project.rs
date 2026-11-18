@@ -29,13 +29,21 @@ pub const MAX_VOLUME: u16 = 2000;
 /// The volume of a new track, a gain of 1.
 pub const UNITY_VOLUME: u16 = 1000;
 
+/// The rightmost pan; 0 is leftmost (ADR 21).
+pub const MAX_PAN: u8 = 200;
+
+/// The pan of a new track.
+pub const CENTER_PAN: u8 = 100;
+
 /// A track's volume is its gain in thousandths (ADR 20). A muted track is not
-/// heard.
+/// heard, and when any track is soloed, only soloed tracks are (ADR 21).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(kani, derive(kani::Arbitrary))]
 pub struct Track {
     pub volume: u16,
     pub muted: bool,
+    pub solo: bool,
+    pub pan: u8,
 }
 
 impl Default for Track {
@@ -44,6 +52,8 @@ impl Default for Track {
         Track {
             volume: UNITY_VOLUME,
             muted: false,
+            solo: false,
+            pan: CENTER_PAN,
         }
     }
 }
@@ -154,6 +164,14 @@ pub enum Command {
         track: u64,
         muted: bool,
     },
+    SetTrackSolo {
+        track: u64,
+        solo: bool,
+    },
+    SetTrackPan {
+        track: u64,
+        pan: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -173,6 +191,7 @@ pub enum EditError {
     NoteOverlap,
     UnknownNote,
     InvalidVolume,
+    InvalidPan,
     NothingToUndo,
     NothingToRedo,
 }
@@ -195,6 +214,7 @@ impl fmt::Display for EditError {
             EditError::NoteOverlap => "notes of one pitch must not overlap",
             EditError::UnknownNote => "no such note",
             EditError::InvalidVolume => "volume out of range",
+            EditError::InvalidPan => "pan out of range",
             EditError::NothingToUndo => "nothing to undo",
             EditError::NothingToRedo => "nothing to redo",
         })
@@ -262,7 +282,15 @@ impl Project {
         self.mixed.binary_search_by_key(&track, |(index, _)| *index)
     }
 
-    /// Gives `track` the volume and mute of `settings`, keeping only tracks
+    /// Whether `track` is heard: it is not muted, and it is soloed if any
+    /// track is (ADR 21).
+    pub fn heard(&self, track: u64) -> bool {
+        let any_solo = self.mixed.iter().any(|(_, track)| track.solo);
+        self.track(track)
+            .is_none_or(|track| !track.muted && (track.solo || !any_solo))
+    }
+
+    /// Gives `track` the settings of `settings`, keeping only tracks
     /// that differ from a new one in `mixed`.
     fn set_track(&mut self, track: u64, settings: Track) {
         match (self.mixed_index(track), settings == Track::default()) {
@@ -509,6 +537,18 @@ impl Project {
             Command::SetTrackMute { track, muted } => {
                 let settings = self.track(track).ok_or(EditError::UnknownTrack)?;
                 next.set_track(track, Track { muted, ..settings });
+            }
+            Command::SetTrackSolo { track, solo } => {
+                let settings = self.track(track).ok_or(EditError::UnknownTrack)?;
+                next.set_track(track, Track { solo, ..settings });
+            }
+            Command::SetTrackPan { track, pan } => {
+                let settings = self.track(track).ok_or(EditError::UnknownTrack)?;
+                let pan = u8::try_from(pan)
+                    .ok()
+                    .filter(|pan| *pan <= MAX_PAN)
+                    .ok_or(EditError::InvalidPan)?;
+                next.set_track(track, Track { pan, ..settings });
             }
         }
         Ok((next, next_clip_id))

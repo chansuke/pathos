@@ -12,8 +12,11 @@ piano roll for the selected clip:
 - A click in the piano roll adds a sixteenth note, and a click on a note
   removes it.
 - `Ctrl-Z` and `Ctrl-Shift-Z` (`Cmd` on macOS) undo and redo.
-- `M` in a track's header mutes it. Dragging the volume up or down changes it
-  by a quarter decibel a pixel, and a double click returns it to 0 dB (ADR 20).
+- `M` in a track's header mutes it and `S` solos it. Dragging the volume up or
+  down changes it by a quarter decibel a pixel, and dragging the pan (`C`, `L`
+  or `R`) left or right moves the track between the channels. A double click
+  returns either to its default. Both are heard while they are dragged
+  (ADR 20, ADR 21).
 
 - `Space` plays and stops, and `Home` returns to the start. Playback is the
   offline render of ADR 15, sample for sample.

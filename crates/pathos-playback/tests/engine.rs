@@ -9,7 +9,7 @@ use std::sync::Arc;
 use pathos_core::{Command, Edit, History, PPQ};
 use pathos_playback::engine::{Engine, Transport};
 use pathos_playback::handoff::{Publisher, handoff};
-use pathos_render::{Score, render};
+use pathos_render::{Frame, Score, render};
 
 const RATE: NonZeroU32 = NonZeroU32::new(8000).unwrap();
 const CHANNELS: usize = 2;
@@ -45,29 +45,33 @@ fn engine() -> (Publisher<Score>, Arc<Transport>, Engine) {
     (publisher, transport, engine)
 }
 
-/// Fills `frames` frames in blocks of `block` frames and returns the first
-/// channel, checking that every channel is the same.
-fn play(engine: &mut Engine, frames: usize, block: usize) -> Vec<f32> {
-    let mut mono = Vec::new();
-    let mut out = vec![1.0; block * CHANNELS];
-    while mono.len() < frames {
-        let size = block.min(frames - mono.len());
-        let out = &mut out[..size * CHANNELS];
-        engine.fill(out, CHANNELS);
-        for frame in out.chunks(CHANNELS) {
-            assert!(
-                frame
-                    .iter()
-                    .all(|sample| sample.to_bits() == frame[0].to_bits())
-            );
-            mono.push(frame[0]);
-        }
+/// Fills `frames` frames of `channels` samples in blocks of `block` frames.
+fn play_on(engine: &mut Engine, frames: usize, block: usize, channels: usize) -> Vec<f32> {
+    let mut played = Vec::new();
+    let mut out = vec![1.0; block * channels];
+    while played.len() < frames * channels {
+        let size = block.min(frames - played.len() / channels);
+        let out = &mut out[..size * channels];
+        engine.fill(out, channels);
+        played.extend_from_slice(out);
     }
-    mono
+    played
 }
 
-fn bits(samples: &[f32]) -> Vec<u32> {
-    samples.iter().map(|sample| sample.to_bits()).collect()
+/// Fills `frames` stereo frames in blocks of `block` frames.
+fn play(engine: &mut Engine, frames: usize, block: usize) -> Vec<Frame> {
+    play_on(engine, frames, block, CHANNELS)
+        .chunks(CHANNELS)
+        .map(|frame| [frame[0], frame[1]])
+        .collect()
+}
+
+fn bits(frames: &[Frame]) -> Vec<u32> {
+    frames
+        .iter()
+        .flatten()
+        .map(|sample| sample.to_bits())
+        .collect()
 }
 
 #[test]
@@ -97,6 +101,7 @@ fn nothing_sounds_before_a_score_or_while_stopped() {
     assert!(
         play(&mut engine, 1000, 100)
             .iter()
+            .flatten()
             .all(|&sample| sample == 0.0)
     );
     assert_eq!(transport.position(), 0);
@@ -106,6 +111,7 @@ fn nothing_sounds_before_a_score_or_while_stopped() {
     assert!(
         play(&mut engine, 1000, 100)
             .iter()
+            .flatten()
             .all(|&sample| sample == 0.0)
     );
     assert_eq!(transport.position(), 0);
@@ -139,4 +145,36 @@ fn an_edit_is_heard_from_the_next_block() {
         bits(&after),
         bits(&render(&project(72), RATE, 2000)[1000..])
     );
+}
+
+/// A device with one channel gets the mean of both channels, and one with more
+/// than two gets silence beyond the second (ADR 21).
+#[test]
+fn a_device_gets_both_channels_whatever_its_channels() {
+    let project = project(60)
+        .apply(0, Command::SetTrackPan { track: 0, pan: 150 })
+        .unwrap()
+        .0;
+    let whole = render(&project, RATE, 6000);
+    assert!(whole.iter().any(|[left, right]| left != right), "panned");
+    // A block of 5000 frames is longer than the engine renders at once.
+    for (channels, block) in [(1, 100), (1, 5000), (4, 100), (4, 5000)] {
+        let (publisher, transport, mut engine) = engine();
+        publisher.publish(Score::new(&project, RATE));
+        transport.play();
+        let played = play_on(&mut engine, 6000, block, channels);
+        let expected: Vec<f32> = whole
+            .iter()
+            .flat_map(|&[left, right]| match channels {
+                1 => vec![(left + right) * 0.5],
+                _ => vec![left, right, 0.0, 0.0],
+            })
+            .collect();
+        let bits = |samples: &[f32]| samples.iter().map(|s| s.to_bits()).collect::<Vec<_>>();
+        assert_eq!(
+            bits(&played),
+            bits(&expected),
+            "{channels} channels, block {block}"
+        );
+    }
 }

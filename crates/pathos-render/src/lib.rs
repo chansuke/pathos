@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 
-use pathos_core::{Event, Project, UNITY_VOLUME};
+use pathos_core::{CENTER_PAN, Event, MAX_PAN, Project, Track, UNITY_VOLUME};
 
 pub mod wav;
 
@@ -35,10 +35,13 @@ const fn frequencies() -> [f32; 128] {
     table
 }
 
-/// The first `frames` samples of the project at `sample_rate`, in one channel.
-/// Each track is weighted by its volume (ADR 20).
-pub fn render(project: &Project, sample_rate: NonZeroU32, frames: usize) -> Vec<f32> {
-    let mut out = vec![0.0; frames];
+/// One sample of the left and of the right channel (ADR 21).
+pub type Frame = [f32; 2];
+
+/// The first `frames` frames of the project at `sample_rate`. Each track is
+/// weighted by its volume (ADR 20) and placed by its pan (ADR 21).
+pub fn render(project: &Project, sample_rate: NonZeroU32, frames: usize) -> Vec<Frame> {
+    let mut out = vec![[0.0; 2]; frames];
     Score::new(project, sample_rate).render(0, &mut out);
     out
 }
@@ -62,7 +65,20 @@ struct Sound {
     off: u128,
     /// The fraction of a cycle the note advances each frame.
     step: f64,
-    level: f32,
+    /// The level in the left and the right channel.
+    levels: Frame,
+}
+
+/// The gains of a track in the left and the right channel: its volume, and a
+/// linear balance that is 1 in both channels at the center (ADR 21). At volume
+/// 1000 and the center both are exactly 1, which leaves a level as it was
+/// before tracks had a volume and a pan.
+fn gains(track: Track) -> Frame {
+    let volume = f32::from(track.volume) / f32::from(UNITY_VOLUME);
+    let center = f32::from(CENTER_PAN);
+    let left = (f32::from(MAX_PAN - track.pan) / center).min(1.0);
+    let right = (f32::from(track.pan) / center).min(1.0);
+    [volume * left, volume * right]
 }
 
 impl Score {
@@ -80,16 +96,14 @@ impl Score {
                 } => {
                     // Only the fraction of a cycle per frame matters.
                     let cycles = f64::from(FREQUENCIES[usize::from(pitch)]) / f64::from(rate);
-                    // A volume of 1000 is a gain of exactly 1, which leaves
-                    // the level as it was before tracks had a volume.
-                    let volume = project.track(track).map_or(UNITY_VOLUME, |t| t.volume);
-                    let gain = f32::from(volume) / f32::from(UNITY_VOLUME);
+                    let [left, right] = gains(project.track(track).unwrap_or_default());
+                    let level = f32::from(velocity) / 127.0;
                     sounding.insert((track, pitch), notes.len());
                     notes.push(Sound {
                         on: sample,
                         off: sample,
                         step: cycles - (cycles as u64) as f64,
-                        level: f32::from(velocity) / 127.0 * gain,
+                        levels: [level * left, level * right],
                     });
                 }
                 Event::Off {
@@ -117,8 +131,8 @@ impl Score {
     /// only on its frame, so blocks rendered one after another join into the
     /// render of the whole. It does not allocate, so it can run on the audio
     /// thread.
-    pub fn render(&self, start: u64, out: &mut [f32]) {
-        out.fill(0.0);
+    pub fn render(&self, start: u64, out: &mut [Frame]) {
+        out.fill([0.0; 2]);
         let start = u128::from(start);
         let end = start + out.len() as u128;
         for note in &self.notes {
@@ -126,7 +140,10 @@ impl Score {
                 break;
             }
             for frame in note.on.max(start)..note.off.min(end) {
-                out[(frame - start) as usize] += note.sample(frame, self.ramp);
+                let [left, right] = note.sample(frame, self.ramp);
+                let out = &mut out[(frame - start) as usize];
+                out[0] += left;
+                out[1] += right;
             }
         }
     }
@@ -135,7 +152,7 @@ impl Score {
 impl Sound {
     /// A triangle wave whose level rises over the first 5 ms of the note and
     /// falls over its last 5 ms, so that it starts and stops without a click.
-    fn sample(&self, frame: u128, ramp: f32) -> f32 {
+    fn sample(&self, frame: u128, ramp: f32) -> Frame {
         let since = frame - self.on;
         let envelope = ((since + 1) as f32 / ramp)
             .min((self.off - frame) as f32 / ramp)
@@ -146,6 +163,6 @@ impl Sound {
         let cycles = since as f64 * self.step;
         let phase = (cycles - (cycles as u64) as f64) as f32;
         let triangle = 4.0 * (phase - 0.5).abs() - 1.0;
-        self.level * envelope * triangle
+        self.levels.map(|level| level * envelope * triangle)
     }
 }

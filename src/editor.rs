@@ -5,7 +5,8 @@
 use std::borrow::Cow;
 
 use pathos_core::{
-    Command, Document, Edit, EditError, History, MAX_VOLUME, PPQ, Project, Tick, UNITY_VOLUME,
+    CENTER_PAN, Command, Document, Edit, EditError, History, MAX_PAN, MAX_VOLUME, PPQ, Project,
+    Tick, UNITY_VOLUME,
 };
 
 use crate::layout::{self, BEAT_WIDTH, Hit};
@@ -46,14 +47,69 @@ enum Drag {
         id: u64,
         x: f32,
     },
-    /// A track's volume, applied when the button is released so that the
-    /// whole gesture is one step of undo (ADR 20).
+    /// A track's volume or pan. It is heard while it moves and applied when
+    /// the button is released, so that the whole gesture is one step of undo
+    /// (ADR 20, ADR 21).
     Volume {
         track: u64,
         y: f32,
         from: f32,
         volume: u16,
     },
+    Pan {
+        track: u64,
+        x: f32,
+        from: u8,
+        pan: u8,
+    },
+}
+
+impl Drag {
+    /// The drag once the pointer is at (`x`, `y`).
+    fn to(self, x: f32, y: f32) -> Drag {
+        match self {
+            Drag::Volume {
+                track,
+                y: from_y,
+                from,
+                ..
+            } => Drag::Volume {
+                track,
+                y: from_y,
+                from,
+                volume: volume_at(from + (from_y - y) * DECIBELS_PER_PIXEL),
+            },
+            Drag::Pan {
+                track,
+                x: from_x,
+                from,
+                ..
+            } => Drag::Pan {
+                track,
+                x: from_x,
+                from,
+                // A pixel is a step of pan, so 100 pixels move a track from
+                // the center to a side.
+                pan: pan_at(f32::from(from) + x - from_x),
+            },
+            clip @ Drag::Clip { .. } => clip,
+        }
+    }
+
+    /// The command that a drag of a track's volume or pan applies.
+    fn command(&self) -> Option<Command> {
+        match *self {
+            Drag::Volume { track, volume, .. } => Some(Command::SetTrackVolume {
+                track,
+                volume: volume.into(),
+            }),
+            Drag::Pan { track, pan, .. } => Some(Command::SetTrackPan {
+                track,
+                pan: pan.into(),
+            }),
+            Drag::Clip { .. } => None,
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -96,24 +152,19 @@ impl Editor {
         self.rejected
     }
 
-    /// The track whose volume is being dragged and the volume it would get.
-    pub fn dragged_volume(&self) -> Option<(u64, u16)> {
-        match self.drag {
-            Some(Drag::Volume { track, volume, .. }) => Some((track, volume)),
-            _ => None,
-        }
+    /// The command that the drag of a track's volume or pan would apply if
+    /// the button were released now.
+    pub fn pending(&self) -> Option<Command> {
+        self.drag.as_ref().and_then(Drag::command)
     }
 
-    /// The project as it should sound: while a volume is dragged, with that
-    /// volume, so that the drag is heard before it becomes an edit (ADR 20).
+    /// The project as it should sound: while a volume or pan is dragged, with
+    /// that volume or pan, so that the drag is heard before it becomes an edit
+    /// (ADR 20, ADR 21).
     pub fn heard(&self) -> Cow<'_, Project> {
         let present = self.history().present();
-        let Some((track, volume)) = self.dragged_volume() else {
+        let Some(command) = self.pending() else {
             return Cow::Borrowed(present);
-        };
-        let command = Command::SetTrackVolume {
-            track,
-            volume: volume.into(),
         };
         match present.apply(self.history().next_clip_id(), command) {
             Ok((project, _)) => Cow::Owned(project),
@@ -135,6 +186,23 @@ impl Editor {
                 .present()
                 .track(track)
                 .map_or(UNITY_VOLUME, |track| track.volume),
+        }
+    }
+
+    /// The pan of `track` as the window shows it: while it is dragged, the
+    /// pan it would get.
+    pub fn pan(&self, track: u64) -> u8 {
+        match self.drag {
+            Some(Drag::Pan {
+                track: dragged,
+                pan,
+                ..
+            }) if dragged == track => pan,
+            _ => self
+                .history()
+                .present()
+                .track(track)
+                .map_or(CENTER_PAN, |track| track.pan),
         }
     }
 
@@ -181,6 +249,24 @@ impl Editor {
                             muted: !muted,
                         }))
                     }
+                    Hit::Solo { track } => {
+                        let solo = project.track(track).is_some_and(|track| track.solo);
+                        Some(Edit::Apply(Command::SetTrackSolo { track, solo: !solo }))
+                    }
+                    Hit::Pan { track } if clicks == 2 => Some(Edit::Apply(Command::SetTrackPan {
+                        track,
+                        pan: CENTER_PAN.into(),
+                    })),
+                    Hit::Pan { track } => {
+                        let pan = self.pan(track);
+                        self.drag = Some(Drag::Pan {
+                            track,
+                            x,
+                            from: pan,
+                            pan,
+                        });
+                        None
+                    }
                     Hit::Volume { track } if clicks == 2 => {
                         Some(Edit::Apply(Command::SetTrackVolume {
                             track,
@@ -214,36 +300,22 @@ impl Editor {
             }
             Input::Move { x, y } => {
                 self.pointer = (x, y);
-                if let Some(Drag::Volume {
-                    y: from_y,
-                    from,
-                    volume,
-                    ..
-                }) = &mut self.drag
-                {
-                    *volume = volume_at(*from + (*from_y - y) * DECIBELS_PER_PIXEL);
-                }
+                self.drag = self.drag.map(|drag| drag.to(x, y));
                 None
             }
             Input::Up { x, y } => {
                 self.pointer = (x, y);
-                let (id, from_x) = match self.drag.take()? {
-                    Drag::Clip { id, x } => (id, x),
-                    Drag::Volume {
-                        track,
-                        y: from_y,
-                        from,
-                        ..
-                    } => {
-                        let volume = volume_at(from + (from_y - y) * DECIBELS_PER_PIXEL);
-                        let before = project.track(track)?.volume;
-                        return (volume != before).then_some(Edit::Apply(
-                            Command::SetTrackVolume {
-                                track,
-                                volume: volume.into(),
-                            },
-                        ));
-                    }
+                let drag = self.drag.take()?.to(x, y);
+                if let Some(command) = drag.command() {
+                    // A drag that ends where it started changes nothing.
+                    let next_clip_id = self.document.history().next_clip_id();
+                    return match project.apply(next_clip_id, command) {
+                        Ok((after, _)) if &after != project => Some(Edit::Apply(command)),
+                        _ => None,
+                    };
+                }
+                let Drag::Clip { id, x: from_x } = drag else {
+                    return None;
                 };
                 let clip = project.clips().iter().find(|clip| clip.id == id)?;
                 let beats = ((x - from_x) / BEAT_WIDTH).round() as i64;
@@ -294,6 +366,21 @@ fn volume_at(decibels: f32) -> u16 {
     volume.round().min(f32::from(MAX_VOLUME)) as u16
 }
 
+/// The pan nearest to `pan`, within the range.
+fn pan_at(pan: f32) -> u8 {
+    pan.round().clamp(0.0, f32::from(MAX_PAN)) as u8
+}
+
+/// A pan as the header of a track shows it: C at the center, else the side
+/// and how far toward it, up to 100.
+pub fn pan_label(pan: u8) -> String {
+    match pan.cmp(&CENTER_PAN) {
+        std::cmp::Ordering::Less => format!("L{}", CENTER_PAN - pan),
+        std::cmp::Ordering::Equal => "C".into(),
+        std::cmp::Ordering::Greater => format!("R{}", pan - CENTER_PAN),
+    }
+}
+
 /// A volume as the header of a track shows it.
 pub fn volume_label(volume: u16) -> String {
     match decibels(volume) {
@@ -314,8 +401,8 @@ fn round_nearest(tick: Tick, step: u64) -> Tick {
 mod tests {
     use super::*;
     use crate::layout::{
-        HEADER_WIDTH, LANE_HEIGHT, ROLL_BEAT_WIDTH, ROW_HEIGHT, Rect, lane_top, mute_rect, row_top,
-        volume_rect,
+        HEADER_WIDTH, LANE_HEIGHT, ROLL_BEAT_WIDTH, ROW_HEIGHT, Rect, lane_top, mute_rect,
+        pan_rect, row_top, solo_rect, volume_rect,
     };
 
     /// The point `beats` into the lane of `track`, halfway down.
@@ -399,6 +486,62 @@ mod tests {
     }
 
     #[test]
+    fn a_click_on_solo_solos_the_track_and_another_ends_it() {
+        let mut editor = with_clip();
+        click(&mut editor, center(solo_rect(0)), 1);
+        let solo = |solo| Command::SetTrackSolo { track: 0, solo };
+        assert_edits(&editor, &and(solo(true)));
+        click(&mut editor, center(solo_rect(0)), 1);
+        let mut commands = and(solo(true));
+        commands.push(solo(false));
+        assert_edits(&editor, &commands);
+    }
+
+    #[test]
+    fn dragging_a_pan_is_heard_and_applies_one_edit_on_release() {
+        let mut editor = with_clip();
+        let (x, y) = center(pan_rect(1));
+        editor.handle(Input::Down { x, y, clicks: 1 });
+        editor.handle(Input::Move { x: x + 20.0, y });
+        editor.handle(Input::Move { x: x + 50.0, y });
+        let pan = |pan| Command::SetTrackPan { track: 1, pan };
+        assert_eq!(editor.pending(), Some(pan(150)));
+        assert_eq!(editor.pan(1), 150);
+        assert_eq!(editor.pan(0), CENTER_PAN, "the other track");
+        assert_eq!(editor.heard().track(1).unwrap().pan, 150);
+        assert_edits(&editor, &SETUP);
+        editor.handle(Input::Up { x: x + 50.0, y });
+        assert_edits(&editor, &and(pan(150)));
+        // A pan stops at each side.
+        drag(&mut editor, (x, y), (x - 1000.0, y));
+        assert_eq!(editor.pan(1), 0);
+        drag(&mut editor, (x, y), (x + 1000.0, y));
+        assert_eq!(editor.pan(1), MAX_PAN);
+        click(&mut editor, (x, y), 2);
+        assert_eq!(editor.pan(1), CENTER_PAN);
+        assert_eq!(editor.history().undo_depth(), SETUP.len() + 4);
+    }
+
+    #[test]
+    fn a_pan_dragged_back_to_where_it_was_applies_nothing() {
+        let mut editor = with_clip();
+        let (x, y) = center(pan_rect(0));
+        editor.handle(Input::Down { x, y, clicks: 1 });
+        editor.handle(Input::Move { x: x - 30.0, y });
+        assert!(!editor.handle(Input::Up { x, y }));
+        assert_edits(&editor, &SETUP);
+    }
+
+    #[test]
+    fn a_pan_shows_its_side() {
+        assert_eq!(pan_label(CENTER_PAN), "C");
+        assert_eq!(pan_label(0), "L100");
+        assert_eq!(pan_label(60), "L40");
+        assert_eq!(pan_label(MAX_PAN), "R100");
+        assert_eq!(pan_label(101), "R1");
+    }
+
+    #[test]
     fn dragging_a_volume_shows_it_and_applies_one_edit_on_release() {
         let mut editor = with_clip();
         let (x, y) = center(volume_rect(0));
@@ -407,7 +550,13 @@ mod tests {
         editor.handle(Input::Move { x, y: y - 24.0 });
         // Four pixels a decibel: +6 dB is a gain of 1.995, which is heard
         // before it is an edit.
-        assert_eq!(editor.dragged_volume(), Some((0, 1995)));
+        assert_eq!(
+            editor.pending(),
+            Some(Command::SetTrackVolume {
+                track: 0,
+                volume: 1995
+            })
+        );
         assert_eq!(editor.volume(0), 1995);
         let heard = editor.heard();
         assert_eq!(heard.track(0).unwrap().volume, 1995);
@@ -416,7 +565,7 @@ mod tests {
         assert_eq!(editor.volume(1), UNITY_VOLUME, "the other track");
         assert_edits(&editor, &SETUP);
         editor.handle(Input::Up { x, y: y - 24.0 });
-        assert_eq!(editor.dragged_volume(), None);
+        assert_eq!(editor.pending(), None);
         assert!(matches!(editor.heard(), Cow::Borrowed(_)));
         assert_edits(
             &editor,

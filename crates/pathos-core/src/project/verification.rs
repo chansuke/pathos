@@ -37,7 +37,10 @@ fn well_formed(p: &Project, next_clip_id: u64) -> bool {
     // The tracks that differ from a new one exist, are in range, differ and
     // are ordered by index.
     let mixed = p.mixed.iter().all(|(index, track)| {
-        *index < p.track_count && track.volume <= MAX_VOLUME && *track != Track::default()
+        *index < p.track_count
+            && track.volume <= MAX_VOLUME
+            && track.pan <= MAX_PAN
+            && *track != Track::default()
     }) && p.mixed.windows(2).all(|pair| pair[0].0 < pair[1].0);
     tempo
         && mixed
@@ -249,13 +252,15 @@ apply_harness!(
     clips = 1,
     Command::DeleteClip { id: kani::any() }
 );
-apply_harness!(
-    delete_clip_with_1_note,
-    tempo = 1,
-    clips = 1,
-    notes = 1,
-    Command::DeleteClip { id: kani::any() }
-);
+// With MiniSat this harness took 292 s and 342 s in CI, and ran past its 10
+// minutes twice once tracks had a solo and a pan, which deleting a clip does
+// not read; locally it took 247 s either way. CaDiCaL took 87 s and 3.6 GB.
+#[kani::proof]
+#[kani::unwind(4)]
+#[kani::solver(cadical)]
+fn delete_clip_with_1_note() {
+    check_apply::<1, 1, 1, 0>(Command::DeleteClip { id: kani::any() });
+}
 apply_harness!(
     delete_clip_of_2,
     tempo = 1,
@@ -399,6 +404,51 @@ apply_harness!(
     }
 );
 
+apply_harness!(
+    set_track_solo_with_1_mixed,
+    tempo = 1,
+    clips = 0,
+    notes = 0,
+    mixed = 1,
+    Command::SetTrackSolo {
+        track: kani::any(),
+        solo: kani::any(),
+    }
+);
+apply_harness!(
+    set_track_solo_with_2_mixed,
+    tempo = 1,
+    clips = 0,
+    notes = 0,
+    mixed = 2,
+    Command::SetTrackSolo {
+        track: kani::any(),
+        solo: kani::any(),
+    }
+);
+apply_harness!(
+    set_track_pan_with_1_mixed,
+    tempo = 1,
+    clips = 0,
+    notes = 0,
+    mixed = 1,
+    Command::SetTrackPan {
+        track: kani::any(),
+        pan: kani::any(),
+    }
+);
+apply_harness!(
+    set_track_pan_with_2_mixed,
+    tempo = 1,
+    clips = 0,
+    notes = 0,
+    mixed = 2,
+    Command::SetTrackPan {
+        track: kani::any(),
+        pan: kani::any(),
+    }
+);
+
 /// The harnesses of each command. A new command does not compile until it is
 /// given one here.
 #[allow(dead_code)]
@@ -421,6 +471,8 @@ fn harnesses(command: Command) -> &'static [fn()] {
             &[set_track_volume_with_1_mixed, set_track_volume_with_2_mixed]
         }
         Command::SetTrackMute { .. } => &[set_track_mute_with_1_mixed, set_track_mute_with_2_mixed],
+        Command::SetTrackSolo { .. } => &[set_track_solo_with_1_mixed, set_track_solo_with_2_mixed],
+        Command::SetTrackPan { .. } => &[set_track_pan_with_1_mixed, set_track_pan_with_2_mixed],
     }
 }
 

@@ -1,11 +1,12 @@
 //! The properties ADR 15 asks of the render: silence where no note sounds, an
 //! onset at the scheduled sample, and the same output on every run and
-//! platform; and the track volume and mute of ADR 20.
+//! platform; the track volume and mute of ADR 20; and the stereo pan of
+//! ADR 21.
 
 use std::num::NonZeroU32;
 
 use pathos_core::{Command, Edit, Event, History, Project};
-use pathos_render::{Score, render};
+use pathos_render::{Frame, Score, render};
 use proptest::prelude::*;
 
 /// At 120 BPM, 960 ticks last half a second.
@@ -45,6 +46,18 @@ fn project(notes: &[NoteSpec]) -> Project {
         }));
     }
     history.present().clone()
+}
+
+/// The render of a project whose tracks are all centered, as one channel: both
+/// channels are equal, bit for bit.
+fn mono(project: &Project, rate: NonZeroU32, frames: usize) -> Vec<f32> {
+    render(project, rate, frames)
+        .into_iter()
+        .map(|[left, right]| {
+            assert_eq!(left.to_bits(), right.to_bits(), "a centered track");
+            left
+        })
+        .collect()
 }
 
 /// The frames from the note-on of each note up to its note-off.
@@ -103,7 +116,7 @@ proptest! {
         let project = project(&notes);
         // Past the end of the clips, so that the tail is checked too.
         let frames = 4 * rate.get() as usize;
-        let out = render(&project, rate, frames);
+        let out = mono(&project, rate, frames);
         let spans = spans(&project, rate);
         for (frame, sample) in out.iter().enumerate() {
             if !spans.iter().any(|&(on, off)| on <= frame && frame < off) {
@@ -116,7 +129,7 @@ proptest! {
     #[test]
     fn a_note_starts_at_its_scheduled_sample(note in note(), rate in rate()) {
         let project = project(&[note]);
-        let out = render(&project, rate, 4 * rate.get() as usize);
+        let out = mono(&project, rate, 4 * rate.get() as usize);
         let first = out.iter().position(|&sample| sample != 0.0);
         let on = spans(&project, rate).first().map(|&(on, _)| on);
         prop_assert_eq!(first, on);
@@ -126,7 +139,7 @@ proptest! {
     /// frequency is above the sample rate.
     #[test]
     fn a_note_stays_within_its_level(note in note(), rate in rate()) {
-        let out = render(&project(&[note]), rate, 4 * rate.get() as usize);
+        let out = mono(&project(&[note]), rate, 4 * rate.get() as usize);
         let level = note.velocity as f32 / 127.0;
         for (frame, sample) in out.iter().enumerate() {
             prop_assert!(sample.abs() <= level, "frame {}: {}", frame, sample);
@@ -153,11 +166,11 @@ proptest! {
             }
             // Leftover samples in the buffer must not leak into the block.
             block.clear();
-            block.resize((*size).min(frames - joined.len()), 1.0);
+            block.resize((*size).min(frames - joined.len()), [1.0; 2]);
             score.render(joined.len() as u64, &mut block);
             joined.extend_from_slice(&block);
         }
-        let bits = |samples: &[f32]| samples.iter().map(|sample| sample.to_bits()).collect::<Vec<_>>();
+        let bits = |frames: &[Frame]| frames.iter().flatten().map(|sample| sample.to_bits()).collect::<Vec<_>>();
         prop_assert_eq!(bits(&joined), bits(&whole));
     }
 
@@ -168,9 +181,9 @@ proptest! {
         let a = NoteSpec { track: 0, ..a };
         let b = NoteSpec { track: 1, ..b };
         let frames = 4 * rate.get() as usize;
-        let both = render(&project(&[a, b]), rate, frames);
-        let a = render(&project(&[a]), rate, frames);
-        let b = render(&project(&[b]), rate, frames);
+        let both = mono(&project(&[a, b]), rate, frames);
+        let a = mono(&project(&[a]), rate, frames);
+        let b = mono(&project(&[b]), rate, frames);
         for frame in 0..frames {
             prop_assert_eq!(both[frame].to_bits(), (a[frame] + b[frame]).to_bits(), "frame {}", frame);
         }
@@ -194,13 +207,42 @@ proptest! {
         let frames = 4 * rate.get() as usize;
         let full = project(&[a]);
         let half = with(full.clone(), Command::SetTrackVolume { track: 0, volume: 500 });
-        let (full, half) = (render(&full, rate, frames), render(&half, rate, frames));
+        let (full, half) = (mono(&full, rate, frames), mono(&half, rate, frames));
         for frame in 0..frames {
             prop_assert_eq!(half[frame].to_bits(), (full[frame] * 0.5).to_bits(), "frame {}", frame);
         }
         let both = project(&[a, b]);
         let other = with(both.clone(), Command::SetTrackVolume { track: 0, volume: 0 });
-        prop_assert_eq!(render(&other, rate, frames), render(&project(&[b]), rate, frames));
+        prop_assert_eq!(mono(&other, rate, frames), mono(&project(&[b]), rate, frames));
+    }
+
+    /// A track panned hard left or right sounds in that channel only, at the
+    /// level it has at the center; between the center and a side, the far
+    /// channel falls linearly.
+    #[test]
+    fn a_track_sounds_where_it_is_panned(a in note(), rate in rate()) {
+        let a = NoteSpec { track: 0, ..a };
+        let frames = 4 * rate.get() as usize;
+        let centered = mono(&project(&[a]), rate, frames);
+        let pan = |pan| render(&with(project(&[a]), Command::SetTrackPan { track: 0, pan }), rate, frames);
+        let (left, right, quarter) = (pan(0), pan(200), pan(150));
+        for frame in 0..frames {
+            let at = centered[frame].to_bits();
+            prop_assert_eq!(left[frame].map(f32::to_bits), [at, 0], "frame {}", frame);
+            prop_assert_eq!(right[frame].map(f32::to_bits), [0, at], "frame {}", frame);
+            let half = (centered[frame] * 0.5).to_bits();
+            prop_assert_eq!(quarter[frame].map(f32::to_bits), [half, at], "frame {}", frame);
+        }
+    }
+
+    /// A soloed track is the only one heard.
+    #[test]
+    fn a_solo_silences_the_other_tracks(a in note(), b in note(), rate in rate()) {
+        let a = NoteSpec { track: 0, ..a };
+        let b = NoteSpec { track: 1, ..b };
+        let frames = 4 * rate.get() as usize;
+        let soloed = with(project(&[a, b]), Command::SetTrackSolo { track: 1, solo: true });
+        prop_assert_eq!(mono(&soloed, rate, frames), mono(&project(&[b]), rate, frames));
     }
 
     /// A muted track is silent, whatever its volume.
@@ -210,7 +252,7 @@ proptest! {
         let frames = 4 * rate.get() as usize;
         let loud = with(project(&[a]), Command::SetTrackVolume { track: 0, volume });
         let muted = with(loud, Command::SetTrackMute { track: 0, muted: true });
-        prop_assert!(render(&muted, rate, frames).iter().all(|sample| *sample == 0.0));
+        prop_assert!(render(&muted, rate, frames).iter().flatten().all(|sample| *sample == 0.0));
     }
 }
 
@@ -227,7 +269,7 @@ fn a_note_plays_at_its_pitch() {
             pitch,
             velocity: 127,
         };
-        let out = render(&project(&[note]), rate, 48_000);
+        let out = mono(&project(&[note]), rate, 48_000);
         let falls = out
             .windows(2)
             .filter(|pair| pair[0] > 0.0 && pair[1] <= 0.0)
@@ -256,18 +298,50 @@ fn a_render_is_the_same_everywhere() {
         pitch,
         velocity,
     });
-    let out = render(&project(&notes), NonZeroU32::new(48_000).unwrap(), 192_000);
-    // FNV-1a over the bits of every sample.
-    let hash = out.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, sample| {
-        sample
-            .to_bits()
-            .to_le_bytes()
-            .iter()
-            .fold(hash, |hash, &byte| {
-                (hash ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3)
-            })
-    });
+    let project = project(&notes);
+    let rate = NonZeroU32::new(48_000).unwrap();
+    let hash = fnv1a(&mono(&project, rate, 192_000));
     assert_eq!(hash, 0x615c_6c63_2423_a304, "render hash {hash:#018x}");
+    // Track 0 left of the center and track 1 hard right, at other volumes.
+    let mut panned = project;
+    for command in [
+        Command::SetTrackPan { track: 0, pan: 40 },
+        Command::SetTrackVolume {
+            track: 0,
+            volume: 700,
+        },
+        Command::SetTrackPan { track: 1, pan: 200 },
+        Command::SetTrackVolume {
+            track: 1,
+            volume: 1300,
+        },
+    ] {
+        panned = with(panned, command);
+    }
+    let samples: Vec<f32> = render(&panned, rate, 192_000)
+        .into_iter()
+        .flatten()
+        .collect();
+    let hash = fnv1a(&samples);
+    assert_eq!(
+        hash, 0x62cf_1d09_65ae_8555,
+        "panned render hash {hash:#018x}"
+    );
+}
+
+/// FNV-1a over the bits of every sample.
+fn fnv1a(samples: &[f32]) -> u64 {
+    samples
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325u64, |hash, sample| {
+            sample
+                .to_bits()
+                .to_le_bytes()
+                .iter()
+                .fold(hash, |hash, &byte| {
+                    (hash ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3)
+                })
+        })
 }
 
 /// Rendering twice gives the same samples.
@@ -281,8 +355,8 @@ fn a_render_is_the_same_every_time() {
         velocity: 100,
     };
     let rate = NonZeroU32::new(44_100).unwrap();
-    let first = render(&project(&[note]), rate, 88_200);
-    let second = render(&project(&[note]), rate, 88_200);
+    let first = mono(&project(&[note]), rate, 88_200);
+    let second = mono(&project(&[note]), rate, 88_200);
     assert!(
         first
             .iter()

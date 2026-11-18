@@ -12,7 +12,7 @@ mod schedule;
 pub use file::{Document, LoadError, UnrecognizedEdit};
 pub use history::{Edit, History};
 pub use project::{
-    Clip, Command, EditError, MAX_PITCH, MAX_TICK, MAX_US_PER_QUARTER, MAX_VELOCITY, MAX_VOLUME,
-    Note, PPQ, Project, TempoChange, Tick, Track, UNITY_VOLUME,
+    CENTER_PAN, Clip, Command, EditError, MAX_PAN, MAX_PITCH, MAX_TICK, MAX_US_PER_QUARTER,
+    MAX_VELOCITY, MAX_VOLUME, Note, PPQ, Project, TempoChange, Tick, Track, UNITY_VOLUME,
 };
 pub use schedule::Event;
