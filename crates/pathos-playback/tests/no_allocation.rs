@@ -89,8 +89,14 @@ fn filling_blocks_neither_allocates_nor_frees() {
     let mut out = vec![0.0; 10_000 * 2];
     transport.play();
 
-    for edit in 0..3 {
-        publisher.publish(Score::new(history.present(), rate));
+    for edit in 0..4 {
+        // The last score loops a beat, which the blocks below cross.
+        let score = if edit < 3 {
+            Score::new(history.present(), rate)
+        } else {
+            Score::looped(history.present(), rate, 0..PPQ)
+        };
+        publisher.publish(score);
         publisher.collect();
         transport.seek(edit * 1000);
         // Taking a new score, rendering in parts and retiring the old score.

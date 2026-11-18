@@ -79,8 +79,10 @@ impl Engine {
     /// Fills `out`, whose frames each have `channels` samples, with the next
     /// frames of the newest score: the left and the right channel in the
     /// first two, silence in any further one, and the mean of both on a
-    /// device with one channel (ADR 21). It is silent while stopped or before
-    /// a score is published. It does not wait, allocate or free.
+    /// device with one channel (ADR 21). When the playhead reaches the end of
+    /// the score's loop, it continues from the loop's start within the same
+    /// block (ADR 22). It is silent while stopped or before a score is
+    /// published. It does not wait, allocate or free.
     pub fn fill(&mut self, out: &mut [f32], channels: usize) {
         let seek = self.transport.seek.swap(NO_SEEK, Ordering::Relaxed);
         if seek != NO_SEEK {
@@ -89,8 +91,19 @@ impl Engine {
         let playing = self.transport.is_playing();
         match self.player.current() {
             Some(score) if playing => {
-                for block in out.chunks_mut(CHUNK * channels) {
-                    let frames = &mut self.frames[..block.len() / channels];
+                let looped = score.looped_frames();
+                let mut out = out;
+                while out.len() >= channels {
+                    let mut count = (out.len() / channels).min(CHUNK);
+                    // Stop at the end of the loop if the playhead is before it.
+                    if let Some(looped) = &looped
+                        && self.position < looped.end
+                    {
+                        count = count.min((looped.end - self.position) as usize);
+                    }
+                    let (block, rest) = out.split_at_mut(count * channels);
+                    out = rest;
+                    let frames = &mut self.frames[..count];
                     score.render(self.position, frames);
                     for (out, &[left, right]) in block.chunks_mut(channels).zip(frames.iter()) {
                         match out {
@@ -103,8 +116,15 @@ impl Engine {
                             [] => {}
                         }
                     }
-                    self.position += frames.len() as u64;
+                    self.position += count as u64;
+                    if let Some(looped) = &looped
+                        && self.position == looped.end
+                    {
+                        self.position = looped.start;
+                    }
                 }
+                // Samples short of a whole frame, which a device never asks for.
+                out.fill(0.0);
             }
             _ => out.fill(0.0),
         }

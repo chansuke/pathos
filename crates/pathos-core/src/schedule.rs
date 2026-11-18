@@ -43,7 +43,7 @@ impl Event {
 impl Project {
     /// The sample of `tick` at `rate` samples per second, rounded down once.
     /// `tick` is at most [`MAX_TICK`](crate::MAX_TICK).
-    fn sample_of(&self, rate: u64, tick: Tick) -> u128 {
+    pub fn sample_of(&self, rate: u64, tick: Tick) -> u128 {
         // The product of the time and the rate can exceed `u128`, so the time
         // is split by the divisor first; the result is the same.
         let divisor = u128::from(PPQ) * 1_000_000;

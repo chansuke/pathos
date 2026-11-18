@@ -364,3 +364,27 @@ fn a_render_is_the_same_every_time() {
             .all(|(a, b)| a.to_bits() == b.to_bits())
     );
 }
+
+/// A loop's frames follow the tempo, as the notes do (ADR 22).
+#[test]
+fn a_loop_follows_the_tempo() {
+    let rate = NonZeroU32::new(48_000).unwrap();
+    let fast = project(&[]);
+    // From the second beat to the third: at 120 BPM from half a second to a
+    // second, at 60 BPM from one second to two.
+    assert_eq!(
+        Score::looped(&fast, rate, SECOND / 2..SECOND).looped_frames(),
+        Some(24_000..48_000)
+    );
+    let slow = with(
+        fast,
+        Command::SetTempo {
+            tick: 0,
+            us_per_quarter: 1_000_000,
+        },
+    );
+    assert_eq!(
+        Score::looped(&slow, rate, SECOND / 2..SECOND).looped_frames(),
+        Some(48_000..96_000)
+    );
+}
