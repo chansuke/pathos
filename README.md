@@ -1,50 +1,26 @@
 # pathos
 
-A DAW (digital audio workstation) built with [gpui](https://gpui.rs).
+A DAW (digital audio workstation) built with [gpui](https://gpui.rs). Early
+development.
 
-Early development. The window shows a timeline of tracks and MIDI clips and a
-piano roll for the selected clip:
+## Usage
 
-- `T` adds a track, and a double click on a lane adds a one-bar clip.
-- Dragging a clip moves it by whole beats, also to another track.
-- `S` splits the selected clip at the beat under the pointer, and `Delete`
-  deletes it.
-- A click in the piano roll adds a sixteenth note, and a click on a note
-  removes it.
-- `Ctrl-Z` and `Ctrl-Shift-Z` (`Cmd` on macOS) undo and redo.
-- `M` in a track's header mutes it and `S` solos it. Dragging the volume up or
-  down changes it by a quarter decibel a pixel, and dragging the pan (`C`, `L`
-  or `R`) left or right moves the track between the channels. A double click
-  returns either to its default. Both are heard while they are dragged
-  (ADR 20, ADR 21).
-- `Master` at the left of the status row is the volume of the whole song,
-  dragged and reset like a track's volume. It does not change the metronome
-  (ADR 24).
-- The two bars under it meter the left and right channel of the song during
-  playback, from -60 dB to +6 dB, and turn red past full scale (ADR 25).
+| Key | Action |
+| --- | --- |
+| `T` | Add a track |
+| Double click on a lane | Add a one-bar clip |
+| `S` | Split the selected clip at the pointer |
+| `Delete` | Delete the selected clip |
+| `Space` / `Home` | Play or stop / return to the start |
+| `L` | Loop the selected clip, or every clip |
+| `K` | Toggle the metronome |
+| `Ctrl-Z` / `Ctrl-Shift-Z` | Undo / redo |
+| `Ctrl-S` / `Ctrl-Shift-S` / `Ctrl-O` | Save / save as / open |
 
-- `Space` plays and stops, and `Home` returns to the start. Playback is the
-  offline render of ADR 15, sample for sample.
-- `L` loops the selected clip, or every clip when none is selected, and stops
-  looping when a loop is on. The loop is not part of the project (ADR 22).
-- `K` turns the metronome on and off. It clicks on every beat during playback,
-  higher on the first beat of each bar, and is not in a rendered file
-  (ADR 23).
-- `Ctrl-S` saves and `Ctrl-Shift-S` saves under a new name; `Ctrl-O` opens a
-  file. `cargo run -- song.pathos` opens `song.pathos`, or creates it on the
-  first save. A project file lists the edits that built the project, one per
-  line, so undo still works after reopening it (ADR 19). On Linux the file
-  prompts need an XDG desktop portal. Closing the window with unsaved changes
-  asks whether to save them first.
-
-To listen without the window, play a short phrase on the default output device:
-
-```sh
-cargo run -p pathos-playback --example play
-```
-
-On Linux, the dev shell points ALSA at the PipeWire and PulseAudio plugins from
-nixpkgs, since the host's own plugins do not load into Nix's alsa-lib.
+Use `Cmd` instead of `Ctrl` on macOS. Drag clips to move them, click in the
+piano roll to add or remove notes, and drag a track's volume and pan to change
+them. `cargo run -- song.pathos` opens or creates `song.pathos`. See
+[docs/usage.md](docs/usage.md) for every control.
 
 ## Build
 
@@ -55,9 +31,8 @@ nix develop
 cargo run
 ```
 
-On NixOS, enable Vulkan with `hardware.graphics.enable = true;`. On other
-distributions, run the Nix-built binary through
-[nixGL](https://github.com/nix-community/nixGL), or build outside `nix develop`.
+On NixOS, set `hardware.graphics.enable = true;`. On other distributions, use
+[nixGL](https://github.com/nix-community/nixGL).
 
 ### macOS (Apple Silicon)
 
@@ -66,24 +41,17 @@ nix develop
 cargo run --features gpui/runtime_shaders
 ```
 
-With Xcode installed, a plain `cargo run` outside `nix develop` also works.
-
 ### Windows
 
-Install [rustup](https://rustup.rs) (MSVC toolchain) and the Visual Studio Build
-Tools with the "Desktop development with C++" workload, then:
+Install [rustup](https://rustup.rs) (MSVC) and the Visual Studio Build Tools
+with "Desktop development with C++", then run `cargo run`.
 
-```powershell
-cargo run
-```
-
-If a release build cannot find `fxc.exe`, set `GPUI_FXC_PATH` to its path in the
-Windows SDK.
+See [docs/development.md](docs/development.md) for platform notes, audio
+examples and pinned dependencies.
 
 ## Specification
 
-The project core is specified by an executable Lean 4 model in `spec/`. The Rust
-core in `crates/pathos-core` is tested against it:
+The core in `crates/pathos-core` is tested against a Lean 4 model in `spec/`:
 
 ```sh
 nix develop
@@ -91,20 +59,8 @@ lake -d spec build
 cargo test -p pathos-core
 ```
 
-To listen to the built-in instrument, render a short phrase to a WAV file:
-
-```sh
-cargo run -p pathos-render --example render -- phrase.wav
-```
-
-Design decisions are recorded in [docs/adr](docs/adr/README.md).
-
-## Note
-
-`Cargo.lock` pins `libc` to 0.2.189 because gpui 0.2.2 depends on an `xattr`
-release that does not build with newer `libc` on Linux. Avoid a bare
-`cargo update`.
+Design decisions are in [docs/adr](docs/adr/README.md).
 
 ## License
 
-pathos is licensed under the [MIT License](LICENSE).
+[MIT](LICENSE)
