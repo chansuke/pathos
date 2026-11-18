@@ -1,7 +1,7 @@
 ---
 number: 25
 title: Meter the song's peaks through two atomics the audio thread raises
-status: proposed
+status: accepted
 date: 2026-11-18
 ---
 
