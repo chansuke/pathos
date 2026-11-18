@@ -229,10 +229,11 @@ impl Pathos {
     fn publish(&self) {
         if let Ok(output) = &self.output {
             let (heard, rate) = (self.editor.heard(), output.sample_rate());
-            output.publish(match &self.looping {
-                Some(ticks) => Score::looped(&heard, rate, ticks.clone()),
-                None => Score::new(&heard, rate),
-            });
+            let mut score = Score::new(&heard, rate);
+            if let Some(ticks) = &self.looping {
+                score = score.looped(ticks.clone());
+            }
+            output.publish(score);
         }
     }
 

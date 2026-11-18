@@ -5,7 +5,7 @@
 
 use std::num::NonZeroU32;
 
-use pathos_core::{Command, Edit, Event, History, Project};
+use pathos_core::{Command, Edit, Event, History, MAX_TICK, PPQ, Project};
 use pathos_render::{Frame, Score, render};
 use proptest::prelude::*;
 
@@ -373,7 +373,9 @@ fn a_loop_follows_the_tempo() {
     // From the second beat to the third: at 120 BPM from half a second to a
     // second, at 60 BPM from one second to two.
     assert_eq!(
-        Score::looped(&fast, rate, SECOND / 2..SECOND).looped_frames(),
+        Score::new(&fast, rate)
+            .looped(SECOND / 2..SECOND)
+            .looped_frames(),
         Some(24_000..48_000)
     );
     let slow = with(
@@ -384,7 +386,188 @@ fn a_loop_follows_the_tempo() {
         },
     );
     assert_eq!(
-        Score::looped(&slow, rate, SECOND / 2..SECOND).looped_frames(),
+        Score::new(&slow, rate)
+            .looped(SECOND / 2..SECOND)
+            .looped_frames(),
         Some(48_000..96_000)
     );
+}
+
+/// The frames from `start` of `score`.
+fn play(score: &Score, start: u64, frames: usize) -> Vec<Frame> {
+    let mut out = vec![[0.0; 2]; frames];
+    score.render(start, &mut out);
+    out
+}
+
+/// The frames that are not silent in either channel.
+fn sounding(frames: &[Frame]) -> Vec<bool> {
+    frames
+        .iter()
+        .map(|frame| frame.iter().any(|&sample| sample != 0.0))
+        .collect()
+}
+
+/// A click of the metronome lasts 20 ms.
+const CLICK: usize = 960;
+
+/// Checks that `frames`, rendered from frame 0, sound only in the 20 ms from
+/// each of `beats`, and from their first frame.
+fn assert_clicks(frames: &[Frame], beats: &[usize]) {
+    let sounding = sounding(frames);
+    for (frame, &sounds) in sounding.iter().enumerate() {
+        if !beats
+            .iter()
+            .any(|&beat| (beat..beat + CLICK).contains(&frame))
+        {
+            assert!(!sounds, "frame {frame} is silent");
+        }
+    }
+    for &beat in beats {
+        assert!(sounding[beat], "a click starts on frame {beat}");
+    }
+}
+
+/// The metronome clicks on every beat and is silent between (ADR 23).
+#[test]
+fn the_metronome_clicks_on_each_beat() {
+    let rate = NonZeroU32::new(48_000).unwrap();
+    let score = Score::new(&project(&[]), rate).with_metronome();
+    // At 120 BPM a beat is 24 000 frames.
+    assert_clicks(
+        &play(&score, 0, 100_000),
+        &[0, 24_000, 48_000, 72_000, 96_000],
+    );
+}
+
+/// The clicks follow the tempo, as the notes do.
+#[test]
+fn the_metronome_follows_the_tempo() {
+    let rate = NonZeroU32::new(48_000).unwrap();
+    let project = with(
+        project(&[]),
+        Command::SetTempo {
+            tick: SECOND,
+            us_per_quarter: 1_000_000,
+        },
+    );
+    let score = Score::new(&project, rate).with_metronome();
+    // 60 BPM from the third beat: a beat is then 48 000 frames.
+    assert_clicks(
+        &play(&score, 0, 150_000),
+        &[0, 24_000, 48_000, 96_000, 144_000],
+    );
+}
+
+/// The first beat of a bar clicks differently from the other beats, and the
+/// same on every bar.
+#[test]
+fn the_metronome_marks_the_first_beat_of_a_bar() {
+    let rate = NonZeroU32::new(48_000).unwrap();
+    let score = Score::new(&project(&[]), rate).with_metronome();
+    let click = |beat: u64| fnv1a(&play(&score, beat * 24_000, CLICK).concat());
+    assert_eq!(click(0), click(4));
+    assert_eq!(click(1), click(2));
+    assert_ne!(click(0), click(1));
+}
+
+/// The metronome adds its clicks to the notes, and rendering in blocks gives
+/// the same frames as rendering at once, also when a block starts within a
+/// click.
+#[test]
+fn the_metronome_adds_to_the_notes_in_any_block() {
+    let rate = NonZeroU32::new(48_000).unwrap();
+    let notes = project(&[NoteSpec {
+        track: 0,
+        start: 0,
+        length: SECOND,
+        pitch: 60,
+        velocity: 100,
+    }]);
+    let score = Score::new(&notes, rate).with_metronome();
+    let clicks = play(&Score::new(&project(&[]), rate).with_metronome(), 0, 60_000);
+    let sum: Vec<Frame> = render(&notes, rate, 60_000)
+        .iter()
+        .zip(&clicks)
+        .map(|(note, click)| [note[0] + click[0], note[1] + click[1]])
+        .collect();
+    assert_eq!(
+        fnv1a(&play(&score, 0, 60_000).concat()),
+        fnv1a(&sum.concat())
+    );
+    for block in [1, 7, 441, 5000] {
+        let start = 24_500;
+        let mut frames = Vec::new();
+        while frames.len() < 30_000 {
+            frames.extend(play(&score, (start + frames.len()) as u64, block));
+        }
+        frames.truncate(30_000);
+        assert_eq!(
+            fnv1a(&frames.concat()),
+            fnv1a(&sum[start..start + 30_000].concat()),
+            "blocks of {block}"
+        );
+    }
+}
+
+/// The last beat that clicks is the last tick a clip may reach.
+#[test]
+fn the_metronome_ends_at_the_last_tick() {
+    let rate = NonZeroU32::new(48_000).unwrap();
+    let project = project(&[]);
+    let score = Score::new(&project, rate).with_metronome();
+    let last = project.sample_of(48_000, MAX_TICK / PPQ * PPQ) as u64;
+    let frames = play(&score, last - 24_000, 60_000);
+    let sounding = sounding(&frames);
+    assert!(sounding[0] && sounding[24_000], "the last two beats click");
+    assert!(
+        !sounding[48_000..].contains(&true),
+        "no beat after the last"
+    );
+}
+
+/// A beat cuts the click of the beat before it, so clicks never add up, even
+/// at the fastest tempo, where beats are closer than a frame (ADR 23).
+#[test]
+fn the_metronome_clicks_one_beat_at_a_time() {
+    let rate = NonZeroU32::new(48_000).unwrap();
+    let project = with(
+        project(&[]),
+        Command::SetTempo {
+            tick: 0,
+            us_per_quarter: 1,
+        },
+    );
+    let score = Score::new(&project, rate).with_metronome();
+    let frames = play(&score, 0, 4096);
+    let single = play(
+        &Score::new(&self::project(&[]), rate).with_metronome(),
+        0,
+        CLICK,
+    );
+    let loudest = |frames: &[Frame]| {
+        frames
+            .iter()
+            .flatten()
+            .fold(0.0_f32, |loudest, sample| loudest.max(sample.abs()))
+    };
+    assert!(
+        loudest(&frames) <= loudest(&single),
+        "no louder than one click"
+    );
+}
+
+/// The first beat of a bar clicks an A6 and the other beats an A5: in 20 ms
+/// the triangle wave falls through zero about 35 and 17.6 times.
+#[test]
+fn the_metronome_clicks_at_its_pitches() {
+    let rate = NonZeroU32::new(48_000).unwrap();
+    let score = Score::new(&project(&[]), rate).with_metronome();
+    let falls = |beat: u64| {
+        play(&score, beat * 24_000, CLICK)
+            .windows(2)
+            .filter(|pair| pair[0][0] > 0.0 && pair[1][0] <= 0.0)
+            .count()
+    };
+    assert_eq!((falls(0), falls(1)), (35, 18));
 }
