@@ -556,24 +556,25 @@ impl Project {
 
     /// The time of `tick` in microseconds from the start, rounded down.
     pub fn tick_to_micros(&self, tick: Tick) -> u128 {
-        self.micros_times_ppq(tick) / u128::from(PPQ)
+        micros_times_ppq(&self.tempo, tick) / u128::from(PPQ)
     }
+}
 
-    /// [`PPQ`] times the microseconds from the start to `tick`.
-    pub(crate) fn micros_times_ppq(&self, tick: Tick) -> u128 {
-        let mut micros_times_ppq: u128 = 0;
-        for (index, change) in self.tempo.iter().enumerate() {
-            // Each tempo applies up to the next change, the last one forever.
-            let end = match self.tempo.get(index + 1) {
-                Some(next) if tick > next.tick => next.tick,
-                _ => tick,
-            };
-            micros_times_ppq +=
-                u128::from(end.saturating_sub(change.tick)) * u128::from(change.us_per_quarter);
-            if end == tick {
-                break;
-            }
+/// [`PPQ`] times the microseconds from the start to `tick` under `tempo`, a
+/// project's tempo changes.
+pub(crate) fn micros_times_ppq(tempo: &[TempoChange], tick: Tick) -> u128 {
+    let mut micros_times_ppq: u128 = 0;
+    for (index, change) in tempo.iter().enumerate() {
+        // Each tempo applies up to the next change, the last one forever.
+        let end = match tempo.get(index + 1) {
+            Some(next) if tick > next.tick => next.tick,
+            _ => tick,
+        };
+        micros_times_ppq +=
+            u128::from(end.saturating_sub(change.tick)) * u128::from(change.us_per_quarter);
+        if end == tick {
+            break;
         }
-        micros_times_ppq
     }
+    micros_times_ppq
 }

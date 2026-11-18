@@ -1,7 +1,7 @@
 //! The samples at which notes start and stop in a render (ADR 15), as
 //! `spec/Pathos/Schedule.lean` specifies them.
 
-use crate::project::{PPQ, Project, Tick};
+use crate::project::{PPQ, Project, TempoChange, Tick, micros_times_ppq};
 
 /// A note starting or stopping at a sample of the render.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,16 +40,23 @@ impl Event {
     }
 }
 
+/// The sample of `tick` at `rate` samples per second under `tempo`, a
+/// project's tempo changes, as [`Project::sample_of`] gives it. It does not
+/// allocate.
+pub fn sample_of(tempo: &[TempoChange], rate: u64, tick: Tick) -> u128 {
+    // The product of the time and the rate can exceed `u128`, so the time is
+    // split by the divisor first; the result is the same.
+    let divisor = u128::from(PPQ) * 1_000_000;
+    let time = micros_times_ppq(tempo, tick);
+    let rate = u128::from(rate);
+    time / divisor * rate + time % divisor * rate / divisor
+}
+
 impl Project {
     /// The sample of `tick` at `rate` samples per second, rounded down once.
     /// `tick` is at most [`MAX_TICK`](crate::MAX_TICK).
     pub fn sample_of(&self, rate: u64, tick: Tick) -> u128 {
-        // The product of the time and the rate can exceed `u128`, so the time
-        // is split by the divisor first; the result is the same.
-        let divisor = u128::from(PPQ) * 1_000_000;
-        let time = self.micros_times_ppq(tick);
-        let rate = u128::from(rate);
-        time / divisor * rate + time % divisor * rate / divisor
+        sample_of(self.tempo(), rate, tick)
     }
 
     /// The events of every note at `rate` samples per second, in order. A note
