@@ -1,7 +1,7 @@
 ---
 number: 28
 title: Draw the piano roll with a keyboard and a ruler of beats, sized to fit a new window
-status: proposed
+status: accepted
 date: 2026-11-19
 ---
 
