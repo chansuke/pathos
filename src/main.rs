@@ -2,14 +2,15 @@ mod editor;
 mod file;
 mod layout;
 
+use std::ops::Range;
 use std::path::PathBuf;
 
 use gpui::{
     App, Application, Bounds, Context, Div, FocusHandle, KeyDownEvent, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, PathPromptOptions, PromptLevel, Task, TitlebarOptions, Window,
-    WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
+    WindowBounds, WindowOptions, div, prelude::*, px, rgb, rgba, size,
 };
-use pathos_core::{Document, PPQ, Project};
+use pathos_core::{Document, PPQ, Project, Tick};
 use pathos_playback::output::Output;
 use pathos_render::Score;
 
@@ -32,10 +33,13 @@ const ERROR: u32 = 0xe06c75;
 const PLAYHEAD: u32 = 0xf0f0f0;
 const MUTED: u32 = 0xd19a66;
 const SOLOED: u32 = 0x98c379;
+/// The loop range over the lanes, translucent so that clips show through.
+const LOOP: u32 = 0x61afef33;
+const LOOP_BAR: u32 = 0x61afef;
 
 const HINT: &str = "T: track · Double-click a lane: clip · Drag: move · S: split · Delete: delete · \
                     Click the roll: note · Ctrl-Z / Ctrl-Shift-Z: undo / redo · Space: play · \
-                    Home: start · Ctrl-S: save · Ctrl-O: open";
+                    Home: start · L: loop · Ctrl-S: save · Ctrl-O: open";
 
 /// The outcome of the last save or open, shown until the next accepted edit.
 enum Notice {
@@ -55,6 +59,8 @@ struct Pathos {
     title: String,
     /// Whether the window is asking to save before it closes.
     asking_to_close: bool,
+    /// The ticks that playback repeats, if any (ADR 22).
+    looping: Option<Range<Tick>>,
 }
 
 impl Pathos {
@@ -222,8 +228,23 @@ impl Pathos {
     /// Hands the project as it should sound now to the audio thread (ADR 18).
     fn publish(&self) {
         if let Ok(output) = &self.output {
-            output.publish(Score::new(&self.editor.heard(), output.sample_rate()));
+            let (heard, rate) = (self.editor.heard(), output.sample_rate());
+            output.publish(match &self.looping {
+                Some(ticks) => Score::looped(&heard, rate, ticks.clone()),
+                None => Score::new(&heard, rate),
+            });
         }
+    }
+
+    /// Loops the selected clip, or every clip, and stops looping when a loop
+    /// is on (ADR 22).
+    fn toggle_loop(&mut self, cx: &mut Context<Self>) {
+        self.looping = match self.looping {
+            Some(_) => None,
+            None => editor::loop_range(self.editor.history().present(), self.editor.selected()),
+        };
+        self.publish();
+        cx.notify();
     }
 
     fn handle_transport(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
@@ -291,6 +312,11 @@ impl Render for Pathos {
                 if this.handle_file(event, cx) || this.handle_transport(event, cx) {
                     return;
                 }
+                let modifiers = &event.keystroke.modifiers;
+                if event.keystroke.key == "l" && !modifiers.secondary() {
+                    this.toggle_loop(cx);
+                    return;
+                }
                 if let Some(key) = key(event) {
                     this.handle(Input::Key(key), cx);
                 }
@@ -347,6 +373,16 @@ impl Render for Pathos {
                     .border_1()
                     .border_color(rgb(BACKGROUND))
                     .children(thumbnail(project, clip.id, clip.length))
+            }))
+            .children(self.looping.as_ref().into_iter().flat_map(|ticks| {
+                let lanes = layout::loop_rect(project, ticks);
+                // A bar above the lanes marks the loop where clips cover it.
+                let bar = Rect {
+                    y: STATUS_HEIGHT - 4.0,
+                    height: 4.0,
+                    ..lanes
+                };
+                [at(lanes).bg(rgba(LOOP)), at(bar).bg(rgb(LOOP_BAR))]
             }))
             .children(selected.map(|id| piano_roll(project, id)))
             .children(playhead)
@@ -562,6 +598,7 @@ fn main() {
                         notice: None,
                         title: String::new(),
                         asking_to_close: false,
+                        looping: None,
                     };
                     // A file named on the command line is opened, or created
                     // by the first save if it does not exist yet.
