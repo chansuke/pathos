@@ -23,3 +23,4 @@
 * [23. Click a metronome in the score, on the beats of the tempo map](0023-click-a-metronome-in-the-score-on-the-beats-of-the-tempo-map.md)
 * [24. Give the project a master volume that scales the notes, not the metronome](0024-give-the-project-a-master-volume-that-scales-the-notes-not-the-metronome.md)
 * [25. Meter the song's peaks through two atomics the audio thread raises](0025-meter-the-song-s-peaks-through-two-atomics-the-audio-thread-raises.md)
+* [26. Color each track by its place and lay out its header as a strip of controls](0026-color-each-track-by-its-place-and-lay-out-its-header-as-a-strip-of-controls.md)
