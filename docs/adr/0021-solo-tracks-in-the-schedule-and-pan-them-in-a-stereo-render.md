@@ -1,7 +1,7 @@
 ---
 number: 21
 title: Solo tracks in the schedule and pan them in a stereo render
-status: proposed
+status: accepted
 date: 2026-11-18
 ---
 
