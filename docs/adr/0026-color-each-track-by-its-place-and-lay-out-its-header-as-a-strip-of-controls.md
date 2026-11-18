@@ -1,7 +1,7 @@
 ---
 number: 26
 title: Color each track by its place and lay out its header as a strip of controls
-status: proposed
+status: accepted
 date: 2026-11-19
 ---
 
