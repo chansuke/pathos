@@ -8,8 +8,9 @@
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
+use std::ops::Range;
 
-use pathos_core::{CENTER_PAN, Event, MAX_PAN, Project, Track, UNITY_VOLUME};
+use pathos_core::{CENTER_PAN, Event, MAX_PAN, Project, Tick, Track, UNITY_VOLUME};
 
 pub mod wav;
 
@@ -56,6 +57,8 @@ pub struct Score {
     /// In the order of their note-on events, which fixes the order in which
     /// notes are added up and so the bits of each sample.
     notes: Vec<Sound>,
+    /// The frames that playback repeats, if any (ADR 22).
+    looped: Option<Range<u64>>,
 }
 
 /// A note as the instrument plays it: from frame `on` up to `off`.
@@ -124,7 +127,27 @@ impl Score {
         Self {
             ramp: (rate / 200).max(1) as f32,
             notes,
+            looped: None,
         }
+    }
+
+    /// The score of `project`, whose playback repeats `ticks` (ADR 22). The
+    /// range is turned into frames as the schedule turns ticks into samples,
+    /// so it stays on the beat at any tempo. An empty range does not loop.
+    pub fn looped(project: &Project, sample_rate: NonZeroU32, ticks: Range<Tick>) -> Self {
+        let frame = |tick| {
+            u64::try_from(project.sample_of(sample_rate.get().into(), tick)).unwrap_or(u64::MAX)
+        };
+        let frames = frame(ticks.start)..frame(ticks.end);
+        Self {
+            looped: (!frames.is_empty()).then_some(frames),
+            ..Self::new(project, sample_rate)
+        }
+    }
+
+    /// The frames that playback repeats, if any.
+    pub fn looped_frames(&self) -> Option<Range<u64>> {
+        self.looped.clone()
     }
 
     /// Writes the samples from frame `start` on to `out`. Each sample depends

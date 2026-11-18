@@ -3,6 +3,7 @@
 //! the top left of the window.
 
 use std::num::NonZeroU32;
+use std::ops::Range;
 
 use pathos_core::{Clip, MAX_TICK, Note, PPQ, Project, Tick};
 
@@ -117,6 +118,16 @@ pub fn pan_rect(track: u64) -> Rect {
         y: lane_top(track) + 4.0,
         width: 40.0,
         height: 18.0,
+    }
+}
+
+/// The part of the timeline that a loop of `ticks` covers (ADR 22).
+pub fn loop_rect(project: &Project, ticks: &Range<Tick>) -> Rect {
+    Rect {
+        x: HEADER_WIDTH + ticks_to_width(ticks.start, BEAT_WIDTH),
+        y: STATUS_HEIGHT,
+        width: ticks_to_width(ticks.end - ticks.start, BEAT_WIDTH),
+        height: project.track_count() as f32 * LANE_HEIGHT,
     }
 }
 
@@ -339,6 +350,19 @@ mod tests {
         }
         let below = lane_top(project.track_count()) + 30.0;
         assert_eq!(hit(&project, None, 30.0, below), Hit::Nothing);
+    }
+
+    #[test]
+    fn a_loop_covers_the_lanes_of_its_ticks() {
+        let project = project();
+        let looped = loop_rect(&project, &(6 * PPQ..10 * PPQ));
+        let clip = clip_rect(&project.clips()[1]);
+        let lanes = Rect {
+            y: lane_top(0),
+            height: 2.0 * LANE_HEIGHT,
+            ..clip
+        };
+        assert_eq!(looped, lanes);
     }
 
     #[test]

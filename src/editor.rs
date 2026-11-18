@@ -3,6 +3,7 @@
 //! here check which edit a gesture produces (ADR 7).
 
 use std::borrow::Cow;
+use std::ops::Range;
 
 use pathos_core::{
     CENTER_PAN, Command, Document, Edit, EditError, History, MAX_PAN, MAX_VOLUME, PPQ, Project,
@@ -366,6 +367,19 @@ fn volume_at(decibels: f32) -> u16 {
     volume.round().min(f32::from(MAX_VOLUME)) as u16
 }
 
+/// The ticks that `L` loops (ADR 22): the clip `selected`, or every clip when
+/// none is selected. A project without clips has nothing to loop.
+pub fn loop_range(project: &Project, selected: Option<u64>) -> Option<Range<Tick>> {
+    let clips = project.clips().iter();
+    let clips: Vec<_> = match selected {
+        Some(id) => clips.filter(|clip| clip.id == id).collect(),
+        None => clips.collect(),
+    };
+    let start = clips.iter().map(|clip| clip.start).min()?;
+    let stop = clips.iter().map(|clip| clip.stop()).max()?;
+    Some(start..stop)
+}
+
 /// The pan nearest to `pan`, within the range.
 fn pan_at(pan: f32) -> u8 {
     pan.round().clamp(0.0, f32::from(MAX_PAN)) as u8
@@ -483,6 +497,20 @@ mod tests {
         let mut commands = and(mute(true));
         commands.push(mute(false));
         assert_edits(&editor, &commands);
+    }
+
+    #[test]
+    fn a_loop_spans_the_selected_clip_or_every_clip() {
+        let mut editor = with_clip();
+        assert_eq!(
+            loop_range(editor.history().present(), editor.selected()),
+            Some(4 * PPQ..8 * PPQ)
+        );
+        click(&mut editor, in_lane(1, 12.5), 2);
+        let both = editor.history().present();
+        assert_eq!(loop_range(both, None), Some(4 * PPQ..16 * PPQ));
+        assert_eq!(loop_range(both, Some(1)), Some(12 * PPQ..16 * PPQ));
+        assert_eq!(loop_range(&Project::default(), None), None);
     }
 
     #[test]

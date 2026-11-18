@@ -178,3 +178,69 @@ fn a_device_gets_both_channels_whatever_its_channels() {
         );
     }
 }
+
+/// Plays `score` from frame `from` for `frames` frames in blocks of `block`.
+fn play_score(score: Score, from: u64, frames: usize, block: usize) -> Vec<Frame> {
+    let (publisher, transport, mut engine) = engine();
+    publisher.publish(score);
+    transport.seek(from);
+    transport.play();
+    play(&mut engine, frames, block)
+}
+
+/// A looped playback is the render of the loop's frames over and over, exact
+/// to the frame wherever the blocks fall (ADR 22).
+#[test]
+fn a_loop_repeats_its_frames() {
+    let project = project(60);
+    // Beats 1 and 2: at 120 BPM and 8000 Hz, frames 4000 up to 12000.
+    let score = || Score::looped(&project, RATE, PPQ..3 * PPQ);
+    assert_eq!(score().looped_frames(), Some(4000..12_000));
+    let whole = render(&project, RATE, 13_000);
+    let mut expected = whole[..12_000].to_vec();
+    while expected.len() < 40_000 {
+        expected.extend_from_slice(&whole[4000..12_000]);
+    }
+    expected.truncate(40_000);
+    for block in [1, 64, 441, 5000] {
+        let played = play_score(score(), 0, 40_000, block);
+        assert_eq!(bits(&played), bits(&expected), "block {block}");
+    }
+    // Inside the loop, playback starts where it is.
+    let played = play_score(score(), 6000, 10_000, 441);
+    let mut expected = whole[6000..12_000].to_vec();
+    expected.extend_from_slice(&whole[4000..8000]);
+    assert_eq!(bits(&played), bits(&expected));
+}
+
+/// Playback after the end of the loop runs on, and the playhead reports the
+/// frame after the loop returns to its start.
+#[test]
+fn playback_after_a_loop_runs_on_and_the_playhead_returns_within_it() {
+    let project = project(60);
+    let whole = render(&project, RATE, 20_000);
+    let played = play_score(
+        Score::looped(&project, RATE, PPQ..3 * PPQ),
+        12_000,
+        8000,
+        100,
+    );
+    assert_eq!(bits(&played), bits(&whole[12_000..20_000]));
+
+    let (publisher, transport, mut engine) = engine();
+    publisher.publish(Score::looped(&project, RATE, PPQ..3 * PPQ));
+    transport.seek(11_000);
+    transport.play();
+    play(&mut engine, 1500, 1500);
+    assert_eq!(transport.position(), 4500);
+}
+
+/// An empty range does not loop.
+#[test]
+fn an_empty_range_does_not_loop() {
+    assert_eq!(
+        Score::looped(&project(60), RATE, PPQ..PPQ).looped_frames(),
+        None
+    );
+    assert_eq!(Score::new(&project(60), RATE).looped_frames(), None);
+}
