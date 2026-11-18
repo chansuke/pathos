@@ -37,15 +37,16 @@ they are.
 
 The window holds whether the metronome is on, and `K` turns it on and off. A
 score built for playback with the metronome on keeps the project's tempo
-changes, each with the time at which it starts, and clicks on every beat: on each tick that is a multiple of a quarter
-note, up to the last tick a clip may reach. A beat's frame is computed as the
-schedule computes the frame of a tick (ADR 15), and the schedule uses the same
-tempo changes with their times, so the differential tests check them. A click is a triangle wave of
-20 ms at half the level of a note at full velocity, an A6 on the first beat of
-each bar of four beats, as the window draws bars, and an A5 on the other
-beats. A beat cuts the click of the beat before it, so clicks never add up. The
-clicks are added to the notes after them, so a frame's notes have the same
-bits with the metronome on or off.
+changes, each with the time at which it starts, and clicks on every beat: on
+each tick that is a multiple of a quarter note, up to the last tick a clip may
+reach. A beat's frame is computed as the schedule computes the frame of a tick
+(ADR 15), and the schedule uses the same tempo changes with their times, so the
+differential tests check them. A click is a triangle wave of 20 ms at half the
+level of a note at full velocity, an A6 on the first beat of each bar of four
+beats, as the window draws bars, and an A5 on the other beats. A beat cuts the
+click of the beat before it, so clicks never add up. The clicks are added to the
+notes after them, so a frame's notes have the same bits with the metronome on or
+off.
 
 To find the beat at a frame, the score bisects the beats by their frames, which
 are in order, and finds each frame by a search of the tempo changes. Each block
