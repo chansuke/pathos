@@ -26,3 +26,4 @@
 * [26. Color each track by its place and lay out its header as a strip of controls](0026-color-each-track-by-its-place-and-lay-out-its-header-as-a-strip-of-controls.md)
 * [27. Put the transport, a readout and the master in a top bar, and the keys in a footer](0027-put-the-transport-a-readout-and-the-master-in-a-top-bar-and-the-keys-in-a-footer.md)
 * [28. Draw the piano roll with a keyboard and a ruler of beats, sized to fit a new window](0028-draw-the-piano-roll-with-a-keyboard-and-a-ruler-of-beats-sized-to-fit-a-new-window.md)
+* [29. Scroll the lanes and dock the piano roll above the footer](0029-scroll-the-lanes-and-dock-the-piano-roll-above-the-footer.md)
