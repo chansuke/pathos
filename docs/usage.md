@@ -31,7 +31,7 @@ bottom, and the keys or the latest message at the bottom. Use `Cmd` instead of `
   dragged and reset like a track's volume. It does not change the metronome.
 - The two bars beside it meter the left and right channel of the song during
   playback, from -60 dB to +6 dB: green up to -6 dB, yellow up to full scale
-  and red past it.
+  and red past it. A mark on each bar holds its latest peak for two seconds.
 
 ## Playback
 
