@@ -1,7 +1,7 @@
 ---
 number: 29
 title: Scroll the lanes and dock the piano roll above the footer
-status: proposed
+status: accepted
 date: 2026-11-19
 ---
 
