@@ -893,6 +893,24 @@ mod tests {
     }
 
     #[test]
+    fn the_piano_roll_follows_the_bottom_of_a_resized_window() {
+        let mut editor = with_clip();
+        editor.resize(1000.0, 600.0);
+        let (x, _) = in_roll(1.3, 60);
+        click(&mut editor, (x, row_top(600.0, 60) + ROW_HEIGHT / 2.0), 1);
+        assert_edits(
+            &editor,
+            &and(Command::AddNote {
+                id: 0,
+                start: PPQ + NOTE_LENGTH,
+                length: NOTE_LENGTH,
+                pitch: 60,
+                velocity: NOTE_VELOCITY,
+            }),
+        );
+    }
+
+    #[test]
     fn split_cuts_the_selected_clip_at_the_nearest_beat_under_the_pointer() {
         let mut editor = with_clip();
         let (x, y) = in_lane(0, 5.6);
