@@ -10,8 +10,9 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     App, Application, Bounds, Context, Div, FocusHandle, FontWeight, KeyDownEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathPromptOptions, PromptLevel, Rgba, Task,
-    TitlebarOptions, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, rgba, size,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathPromptOptions, PromptLevel, Rgba,
+    ScrollWheelEvent, Task, TitlebarOptions, Window, WindowBounds, WindowOptions, div, prelude::*,
+    px, rgb, rgba, size,
 };
 use pathos_core::{CENTER_PAN, Clip, Document, PPQ, Project, Tick, UNITY_VOLUME};
 use pathos_playback::output::Output;
@@ -766,7 +767,7 @@ impl Render for Pathos {
         }
         let width = f32::from(window.viewport_size().width);
         let height = f32::from(window.viewport_size().height);
-        self.editor.resize(width);
+        self.editor.resize(width, height);
         let status = match (self.editor.rejected(), &self.notice, &self.output) {
             (Some(error), _, _) => Some((error.to_string(), true)),
             (None, Some(Notice::Saved(path)), _) => {
@@ -804,6 +805,8 @@ impl Render for Pathos {
         };
         let top_bar = self.top_bar(width, tick, frame, cx);
         let project = self.editor.history().present();
+        let view = self.editor.view();
+        let shown = layout::lanes_rect(&view, selected.is_some());
 
         div()
             .size_full()
@@ -858,30 +861,44 @@ impl Render for Pathos {
                     this.handle(Input::Up { x, y }, cx);
                 }),
             )
+            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
+                let (x, y) = (f32::from(event.position.x), f32::from(event.position.y));
+                // A line of a wheel is a third of a lane, so a notch of three
+                // lines scrolls one lane.
+                let delta = event.delta.pixel_delta(px(LANE_HEIGHT / 3.0));
+                if this.editor.scroll(x, y, -f32::from(delta.y)) {
+                    cx.notify();
+                }
+            }))
             .children(top_bar)
             .children(ruler(project, self.looping.as_ref(), playhead, width))
-            .children(lanes(&self.editor, width))
-            .children(
-                project
-                    .clips()
-                    .iter()
-                    .map(|clip| clip_view(project, clip, Some(clip.id) == selected)),
-            )
-            .children(
-                self.looping
-                    .as_ref()
-                    .map(|ticks| at(layout::loop_rect(project, ticks)).bg(rgba(LOOP))),
-            )
-            .children(selected.map(|id| piano_roll(project, id, width)))
-            .children(playhead.map(|x| {
-                at(Rect {
-                    x,
-                    y: TIMELINE_TOP,
-                    width: 1.0,
-                    height: project.track_count() as f32 * LANE_HEIGHT,
-                })
-                .bg(rgb(PLAYHEAD))
-            }))
+            .child(scrolled(
+                shown,
+                view.scroll,
+                lanes(&self.editor, width)
+                    .into_iter()
+                    .chain(
+                        project
+                            .clips()
+                            .iter()
+                            .map(|clip| clip_view(project, clip, Some(clip.id) == selected)),
+                    )
+                    .chain(
+                        self.looping
+                            .as_ref()
+                            .map(|ticks| at(layout::loop_rect(project, ticks)).bg(rgba(LOOP))),
+                    )
+                    .chain(playhead.map(|x| {
+                        at(Rect {
+                            x,
+                            y: TIMELINE_TOP,
+                            width: 1.0,
+                            height: project.track_count() as f32 * LANE_HEIGHT,
+                        })
+                        .bg(rgb(PLAYHEAD))
+                    })),
+            ))
+            .children(selected.map(|id| piano_roll(project, id, width, height)))
             .child(footer(status, width, height))
     }
 }
@@ -1126,11 +1143,11 @@ fn thumbnail(project: &Project, clip: &Clip, color: Rgba) -> Vec<Div> {
 /// The piano roll of the clip `id`: a ruler naming the clip and numbering its
 /// beats, a keyboard, a row per pitch, a line per sixteenth, stronger on a
 /// beat, and the notes in the color of the clip's track (ADR 28).
-fn piano_roll(project: &Project, id: u64, width: f32) -> Div {
+fn piano_roll(project: &Project, id: u64, width: f32, height: f32) -> Div {
     let Some(clip) = project.clips().iter().find(|clip| clip.id == id) else {
         return div();
     };
-    let top = layout::roll_top(project);
+    let top = layout::roll_top(height);
     let ruler = top - ROLL_RULER_HEIGHT;
     let roll_width = layout::roll_width(clip);
     let bar = clip.start / (4 * PPQ) + 1;
@@ -1187,7 +1204,7 @@ fn piano_roll(project: &Project, id: u64, width: f32) -> Div {
         );
     }
     for pitch in LOWEST_PITCH..=HIGHEST_PITCH {
-        let y = layout::row_top(project, pitch);
+        let y = layout::row_top(height, pitch);
         let black = matches!(pitch % 12, 1 | 3 | 6 | 8 | 10);
         let row = at(Rect {
             x: HEADER_WIDTH,
@@ -1249,7 +1266,7 @@ fn piano_roll(project: &Project, id: u64, width: f32) -> Div {
     elements.extend(
         project
             .notes(id)
-            .filter_map(|note| layout::note_rect(project, note))
+            .filter_map(|note| layout::note_rect(height, note))
             .map(|rect| {
                 at(rect)
                     .rounded(px(2.0))
@@ -1259,6 +1276,19 @@ fn piano_roll(project: &Project, id: u64, width: f32) -> Div {
             }),
     );
     div().children(elements)
+}
+
+/// The space `shown` of the window, which shows `elements` moved up by
+/// `scroll` and cuts them at its edges (ADR 29). The elements are placed in
+/// window coordinates as if nothing were scrolled.
+fn scrolled(shown: Rect, scroll: f32, elements: impl IntoIterator<Item = Div>) -> Div {
+    at(shown).overflow_hidden().child(
+        div()
+            .absolute()
+            .left(px(-shown.x))
+            .top(px(-shown.y - scroll))
+            .children(elements),
+    )
 }
 
 /// An element placed at `rect` of its parent.
