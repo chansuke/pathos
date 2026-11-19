@@ -10,7 +10,7 @@ use pathos_core::{
     Tick, UNITY_VOLUME,
 };
 
-use crate::layout::{self, BEAT_WIDTH, Fader, Hit};
+use crate::layout::{self, BEAT_WIDTH, Fader, Hit, View, WINDOW_HEIGHT, WINDOW_WIDTH};
 
 /// A new clip lasts one bar of 4/4.
 const CLIP_LENGTH: u64 = 4 * PPQ;
@@ -110,16 +110,36 @@ impl Drag {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Editor {
     document: Document,
     selected: Option<u64>,
     drag: Option<Drag>,
     pointer: (f32, f32),
-    /// The width of the window, which places the master volume.
+    /// The size of the window, which places the master volume and the piano
+    /// roll.
     width: f32,
+    height: f32,
+    /// How far the lanes were last scrolled; [`Editor::view`] keeps it within
+    /// the lanes the window shows (ADR 29).
+    scroll: f32,
     /// Why the last edit was rejected, until the next edit is accepted.
     rejected: Option<EditError>,
+}
+
+impl Default for Editor {
+    fn default() -> Self {
+        Editor {
+            document: Document::default(),
+            selected: None,
+            drag: None,
+            pointer: (0.0, 0.0),
+            width: WINDOW_WIDTH,
+            height: WINDOW_HEIGHT,
+            scroll: 0.0,
+            rejected: None,
+        }
+    }
 }
 
 impl Editor {
@@ -130,9 +150,37 @@ impl Editor {
         }
     }
 
-    /// Follows the window to `width`.
-    pub fn resize(&mut self, width: f32) {
-        self.width = width;
+    /// Follows the window to `width` by `height`.
+    pub fn resize(&mut self, width: f32, height: f32) {
+        (self.width, self.height) = (width, height);
+    }
+
+    /// What the window shows: its size, and the lanes scrolled as far as
+    /// they were, but no further than their end.
+    pub fn view(&self) -> View {
+        let view = View {
+            width: self.width,
+            height: self.height,
+            scroll: 0.0,
+        };
+        let max = layout::max_scroll(self.history().present(), &view, self.selected().is_some());
+        View {
+            scroll: self.scroll.clamp(0.0, max),
+            ..view
+        }
+    }
+
+    /// Scrolls the lanes down by `by` pixels, or up when it is negative, if
+    /// `(x, y)` is over them, and returns whether they moved.
+    pub fn scroll(&mut self, x: f32, y: f32, by: f32) -> bool {
+        let view = self.view();
+        let rolled = self.selected().is_some();
+        if !layout::lanes_rect(&view, rolled).contains(x, y) {
+            return false;
+        }
+        let max = layout::max_scroll(self.history().present(), &view, rolled);
+        self.scroll = (view.scroll + by).clamp(0.0, max);
+        self.scroll != view.scroll
     }
 
     pub fn document(&self) -> &Document {
@@ -219,8 +267,13 @@ impl Editor {
         let Some(edit) = self.edit_for(input) else {
             return false;
         };
-        if let Edit::Apply(Command::AddClip { .. }) = edit {
-            self.selected = Some(self.history().next_clip_id());
+        match edit {
+            Edit::Apply(Command::AddClip { .. }) => {
+                self.selected = Some(self.history().next_clip_id());
+            }
+            // The lanes end at the new track, so it is in view.
+            Edit::Apply(Command::AddTrack) => self.scroll = f32::INFINITY,
+            _ => {}
         }
         self.rejected = self.document.edit(edit).err();
         self.rejected.is_none()
@@ -229,6 +282,7 @@ impl Editor {
     /// The edit `input` makes, if any, after updating the selection, the drag
     /// and the pointer.
     fn edit_for(&mut self, input: Input) -> Option<Edit> {
+        let view = self.view();
         let project = self.document.history().present();
         match input {
             Input::Down { x, y, clicks } => {
@@ -238,7 +292,7 @@ impl Editor {
                         fader: Fader::Master,
                     }
                 } else {
-                    layout::hit(project, self.selected(), x, y)
+                    layout::hit(project, &view, self.selected(), x, y)
                 };
                 match hit {
                     Hit::Lane { track, tick } if clicks == 2 => {
@@ -332,7 +386,7 @@ impl Editor {
                 let clip = project.clips().iter().find(|clip| clip.id == id)?;
                 let beats = ((x - from_x) / BEAT_WIDTH).round() as i64;
                 let start = clip.start.saturating_add_signed(beats * PPQ as i64);
-                let track = layout::track_at(project, y).unwrap_or(clip.track);
+                let track = layout::track_at(project, &view, Some(id), y).unwrap_or(clip.track);
                 (start != clip.start || track != clip.track).then_some(Edit::Apply(
                     Command::MoveClip {
                         id: clip.id,
@@ -348,7 +402,7 @@ impl Editor {
             Input::Key(Key::SplitClip) => {
                 let id = self.selected()?;
                 let (x, y) = self.pointer;
-                match layout::hit(project, Some(id), x, y) {
+                match layout::hit(project, &view, Some(id), x, y) {
                     Hit::Clip { id: under, tick } if under == id => {
                         Some(Edit::Apply(Command::SplitClip {
                             id,
@@ -435,8 +489,8 @@ fn round_nearest(tick: Tick, step: u64) -> Tick {
 mod tests {
     use super::*;
     use crate::layout::{
-        HEADER_WIDTH, LANE_HEIGHT, ROLL_BEAT_WIDTH, ROW_HEIGHT, Rect, lane_top, master_rect,
-        mute_rect, pan_rect, row_top, solo_rect, volume_rect,
+        HEADER_WIDTH, LANE_HEIGHT, ROLL_BEAT_WIDTH, ROW_HEIGHT, Rect, TIMELINE_TOP, lane_top,
+        lanes_rect, master_rect, max_scroll, mute_rect, pan_rect, row_top, solo_rect, volume_rect,
     };
 
     /// The point `beats` into the lane of `track`, halfway down.
@@ -447,10 +501,10 @@ mod tests {
         )
     }
 
-    fn in_roll(editor: &Editor, beats: f32, pitch: u8) -> (f32, f32) {
+    fn in_roll(beats: f32, pitch: u8) -> (f32, f32) {
         (
             HEADER_WIDTH + beats * ROLL_BEAT_WIDTH,
-            row_top(editor.history().present(), pitch) + ROW_HEIGHT / 2.0,
+            row_top(WINDOW_HEIGHT, pitch) + ROW_HEIGHT / 2.0,
         )
     }
 
@@ -670,7 +724,7 @@ mod tests {
     #[test]
     fn dragging_the_master_volume_is_heard_and_applies_one_edit_on_release() {
         let mut editor = with_clip();
-        editor.resize(1200.0);
+        editor.resize(1200.0, WINDOW_HEIGHT);
         let (x, y) = center(master_rect(1200.0));
         editor.handle(Input::Down { x, y, clicks: 1 });
         editor.handle(Input::Move { x, y: y + 24.0 });
@@ -739,6 +793,74 @@ mod tests {
         );
     }
 
+    fn with_tracks(tracks: u64) -> Editor {
+        let mut editor = Editor::default();
+        for _ in 0..tracks {
+            editor.handle(Input::Key(Key::AddTrack));
+        }
+        editor
+    }
+
+    #[test]
+    fn adding_a_track_scrolls_the_lanes_to_it() {
+        let editor = with_tracks(10);
+        let view = editor.view();
+        let lanes = lanes_rect(&view, false);
+        assert!(view.scroll > 0.0);
+        assert_eq!(
+            lane_top(9) + LANE_HEIGHT - view.scroll,
+            lanes.y + lanes.height,
+            "the last lane ends at the bottom of the lanes"
+        );
+        assert_eq!(with_tracks(2).view().scroll, 0.0, "two tracks fit");
+    }
+
+    #[test]
+    fn a_wheel_over_the_lanes_scrolls_them_between_their_ends() {
+        let mut editor = with_tracks(10);
+        let (x, y) = in_lane(0, 1.0);
+        let end = editor.view().scroll;
+        assert!(!editor.scroll(x, y, 10.0), "already at the end");
+        assert!(editor.scroll(x, y, -30.0));
+        assert_eq!(editor.view().scroll, end - 30.0);
+        assert!(
+            editor.scroll(HEADER_WIDTH - 1.0, y, -10_000.0),
+            "over a header"
+        );
+        assert_eq!(editor.view().scroll, 0.0);
+        assert!(!editor.scroll(x, y, -1.0), "already at the start");
+        assert!(
+            !editor.scroll(x, TIMELINE_TOP - 1.0, 30.0),
+            "over the ruler"
+        );
+        assert!(
+            !editor.scroll(x, WINDOW_HEIGHT - 1.0, 30.0),
+            "over the footer"
+        );
+        assert_eq!(editor.view().scroll, 0.0);
+    }
+
+    #[test]
+    fn the_lanes_scroll_back_when_their_space_grows() {
+        let mut editor = with_tracks(10);
+        // A bar on the last track, clicked where it is drawn.
+        let (x, y) = in_lane(9, 0.5);
+        let scroll = editor.view().scroll;
+        click(&mut editor, (x, y - scroll), 2);
+        assert_eq!(editor.selected(), Some(0));
+        assert_eq!(editor.history().present().clips()[0].track, 9);
+        // The roll takes space from the lanes; they stay at their end.
+        let rolled = max_scroll(editor.history().present(), &editor.view(), true);
+        assert_eq!(editor.view().scroll, rolled);
+        assert!(editor.scroll(x, TIMELINE_TOP, -100.0));
+        // Without the roll, the lanes scroll back only as far as their end.
+        click(&mut editor, (x, TIMELINE_TOP), 1);
+        assert_eq!(editor.selected(), None);
+        let end = max_scroll(editor.history().present(), &editor.view(), false);
+        assert!(end < rolled - 100.0);
+        assert_eq!(editor.view().scroll, end);
+    }
+
     #[test]
     fn a_click_on_a_clip_selects_it_without_an_edit() {
         let mut editor = with_clip();
@@ -751,7 +873,7 @@ mod tests {
     #[test]
     fn a_click_in_the_piano_roll_adds_a_sixteenth_and_another_removes_it() {
         let mut editor = with_clip();
-        let cell = in_roll(&editor, 1.3, 60);
+        let cell = in_roll(1.3, 60);
         click(&mut editor, cell, 1);
         let mut commands = and(Command::AddNote {
             id: 0,

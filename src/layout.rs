@@ -59,6 +59,15 @@ impl Rect {
     }
 }
 
+/// What the window shows of a project: its size, and how far the lanes are
+/// scrolled down from the first (ADR 29).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct View {
+    pub width: f32,
+    pub height: f32,
+    pub scroll: f32,
+}
+
 /// What lies under a point.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hit {
@@ -267,12 +276,37 @@ pub fn clip_rect(clip: &Clip) -> Rect {
     }
 }
 
-pub fn roll_top(project: &Project) -> f32 {
-    lane_top(project.track_count()) + ROLL_RULER_HEIGHT
+/// The space that shows the lanes, between the ruler and the piano roll, or
+/// the footer when no clip is `rolled` (ADR 29). Lanes, headers and clips are
+/// placed as if unscrolled and shown in it moved up by the view's scroll.
+pub fn lanes_rect(view: &View, rolled: bool) -> Rect {
+    let bottom = if rolled {
+        roll_top(view.height) - ROLL_RULER_HEIGHT
+    } else {
+        view.height - FOOTER_HEIGHT
+    };
+    Rect {
+        x: 0.0,
+        y: TIMELINE_TOP,
+        width: view.width,
+        height: (bottom - TIMELINE_TOP).max(0.0),
+    }
 }
 
-pub fn row_top(project: &Project, pitch: u8) -> f32 {
-    roll_top(project) + f32::from(HIGHEST_PITCH - pitch) * ROW_HEIGHT
+/// How far the lanes of `project` can scroll, so that the last lane ends at
+/// the bottom of the space that shows them.
+pub fn max_scroll(project: &Project, view: &View, rolled: bool) -> f32 {
+    (project.track_count() as f32 * LANE_HEIGHT - lanes_rect(view, rolled).height).max(0.0)
+}
+
+/// The top of the piano roll in a window `height` tall: right above the
+/// footer (ADR 29).
+pub fn roll_top(height: f32) -> f32 {
+    height - FOOTER_HEIGHT - roll_height()
+}
+
+pub fn row_top(height: f32, pitch: u8) -> f32 {
+    roll_top(height) + f32::from(HIGHEST_PITCH - pitch) * ROW_HEIGHT
 }
 
 pub fn roll_height() -> f32 {
@@ -281,12 +315,12 @@ pub fn roll_height() -> f32 {
 
 /// The rectangle of a note in the piano roll of its clip, or `None` when its
 /// pitch lies outside the roll.
-pub fn note_rect(project: &Project, note: &Note) -> Option<Rect> {
+pub fn note_rect(height: f32, note: &Note) -> Option<Rect> {
     (LOWEST_PITCH..=HIGHEST_PITCH)
         .contains(&note.pitch)
         .then(|| Rect {
             x: HEADER_WIDTH + ticks_to_width(note.start, ROLL_BEAT_WIDTH),
-            y: row_top(project, note.pitch),
+            y: row_top(height, note.pitch),
             width: ticks_to_width(note.length, ROLL_BEAT_WIDTH),
             height: ROW_HEIGHT,
         })
@@ -317,37 +351,23 @@ pub fn tick_at(project: &Project, sample_rate: NonZeroU32, frame: u64) -> Tick {
     low
 }
 
-/// What lies under `(x, y)`, with the piano roll showing the clip `selected`.
-pub fn hit(project: &Project, selected: Option<u64>, x: f32, y: f32) -> Hit {
-    if x < HEADER_WIDTH {
-        return match track_at(project, y) {
-            Some(track) if mute_rect(track).contains(x, y) => Hit::Mute { track },
-            Some(track) if solo_rect(track).contains(x, y) => Hit::Solo { track },
-            Some(track) if pan_rect(track).contains(x, y) => Hit::Pan { track },
-            Some(track) if volume_rect(track).contains(x, y) => Hit::Volume {
-                fader: Fader::Track(track),
-            },
-            _ => Hit::Nothing,
-        };
+/// What lies under `(x, y)` in `view`, with the piano roll showing the clip
+/// `selected`.
+pub fn hit(project: &Project, view: &View, selected: Option<u64>, x: f32, y: f32) -> Hit {
+    let clip = selected.and_then(|id| project.clips().iter().find(|clip| clip.id == id));
+    if lanes_rect(view, clip.is_some()).contains(x, y) {
+        return lane_hit(project, x, y + view.scroll);
     }
-    if let Some(track) = track_at(project, y) {
-        let tick = width_to_ticks(x - HEADER_WIDTH, BEAT_WIDTH);
-        return match project
-            .clips()
-            .iter()
-            .find(|clip| clip.track == track && clip.start <= tick && tick < clip.stop())
-        {
-            Some(clip) => Hit::Clip { id: clip.id, tick },
-            None => Hit::Lane { track, tick },
-        };
-    }
-    let Some(clip) = selected.and_then(|id| project.clips().iter().find(|clip| clip.id == id))
-    else {
+    let Some(clip) = clip else {
         return Hit::Nothing;
     };
-    let row = (y - roll_top(project)) / ROW_HEIGHT;
+    let row = (y - roll_top(view.height)) / ROW_HEIGHT;
     let tick = width_to_ticks(x - HEADER_WIDTH, ROLL_BEAT_WIDTH);
-    if row < 0.0 || row >= f32::from(HIGHEST_PITCH - LOWEST_PITCH + 1) || tick >= clip.length {
+    if x < HEADER_WIDTH
+        || row < 0.0
+        || row >= f32::from(HIGHEST_PITCH - LOWEST_PITCH + 1)
+        || tick >= clip.length
+    {
         return Hit::Nothing;
     }
     let pitch = HIGHEST_PITCH - row as u8;
@@ -368,8 +388,49 @@ pub fn hit(project: &Project, selected: Option<u64>, x: f32, y: f32) -> Hit {
     }
 }
 
-/// The track whose lane spans `y`.
-pub fn track_at(project: &Project, y: f32) -> Option<u64> {
+/// What lies under `(x, y)` of the lanes and their headers as unscrolled.
+fn lane_hit(project: &Project, x: f32, y: f32) -> Hit {
+    let Some(track) = lane_at(project, y) else {
+        return Hit::Nothing;
+    };
+    if x < HEADER_WIDTH {
+        return if mute_rect(track).contains(x, y) {
+            Hit::Mute { track }
+        } else if solo_rect(track).contains(x, y) {
+            Hit::Solo { track }
+        } else if pan_rect(track).contains(x, y) {
+            Hit::Pan { track }
+        } else if volume_rect(track).contains(x, y) {
+            Hit::Volume {
+                fader: Fader::Track(track),
+            }
+        } else {
+            Hit::Nothing
+        };
+    }
+    let tick = width_to_ticks(x - HEADER_WIDTH, BEAT_WIDTH);
+    match project
+        .clips()
+        .iter()
+        .find(|clip| clip.track == track && clip.start <= tick && tick < clip.stop())
+    {
+        Some(clip) => Hit::Clip { id: clip.id, tick },
+        None => Hit::Lane { track, tick },
+    }
+}
+
+/// The track whose lane is shown at `y` of `view`, with the piano roll
+/// showing the clip `selected`.
+pub fn track_at(project: &Project, view: &View, selected: Option<u64>, y: f32) -> Option<u64> {
+    let rolled = selected.is_some_and(|id| project.clips().iter().any(|clip| clip.id == id));
+    let lanes = lanes_rect(view, rolled);
+    (lanes.y <= y && y < lanes.y + lanes.height)
+        .then(|| lane_at(project, y + view.scroll))
+        .flatten()
+}
+
+/// The track whose lane spans `y` of the lanes as unscrolled.
+fn lane_at(project: &Project, y: f32) -> Option<u64> {
     let lane = (y - TIMELINE_TOP) / LANE_HEIGHT;
     (lane >= 0.0 && lane < project.track_count() as f32).then_some(lane as u64)
 }
@@ -387,6 +448,13 @@ mod tests {
     use pathos_core::{Command, Edit, History};
 
     use super::*;
+
+    /// A new window, unscrolled.
+    const VIEW: View = View {
+        width: WINDOW_WIDTH,
+        height: WINDOW_HEIGHT,
+        scroll: 0.0,
+    };
 
     /// Two tracks: on track 0 a bar at beat 0 with notes at the edges of the
     /// piano roll and one above it, and on track 1 a bar at beat 6.
@@ -437,7 +505,7 @@ mod tests {
         for clip in project.clips() {
             let (x, y) = center(clip_rect(clip));
             assert!(
-                matches!(hit(&project, None, x, y), Hit::Clip { id, .. } if id == clip.id),
+                matches!(hit(&project, &VIEW, None, x, y), Hit::Clip { id, .. } if id == clip.id),
                 "clip {}",
                 clip.id
             );
@@ -449,16 +517,16 @@ mod tests {
         let project = project();
         for track in 0..project.track_count() {
             let (x, y) = center(mute_rect(track));
-            assert_eq!(hit(&project, None, x, y), Hit::Mute { track });
+            assert_eq!(hit(&project, &VIEW, None, x, y), Hit::Mute { track });
             let (x, y) = center(solo_rect(track));
-            assert_eq!(hit(&project, None, x, y), Hit::Solo { track });
+            assert_eq!(hit(&project, &VIEW, None, x, y), Hit::Solo { track });
             let (x, y) = center(pan_rect(track));
-            assert_eq!(hit(&project, None, x, y), Hit::Pan { track });
+            assert_eq!(hit(&project, &VIEW, None, x, y), Hit::Pan { track });
             let (x, y) = center(volume_rect(track));
             let volume = Hit::Volume {
                 fader: Fader::Track(track),
             };
-            assert_eq!(hit(&project, None, x, y), volume);
+            assert_eq!(hit(&project, &VIEW, None, x, y), volume);
             let [name, mute, solo, pan, rect] = [
                 name_rect(track),
                 mute_rect(track),
@@ -487,30 +555,42 @@ mod tests {
             assert_eq!(solo.x + solo.width, rect.x + rect.width);
             assert!(rect.x + rect.width < HEADER_WIDTH, "short of the timeline");
             assert_eq!(
-                hit(&project, None, center(name).0, center(name).1),
+                hit(&project, &VIEW, None, center(name).0, center(name).1),
                 Hit::Nothing
             );
             // The first pixel of a control is inside and the ones past its
             // ends are not.
-            assert_eq!(hit(&project, None, rect.x, rect.y), volume);
+            assert_eq!(hit(&project, &VIEW, None, rect.x, rect.y), volume);
             assert_eq!(
-                hit(&project, None, rect.x - 1.0, y),
+                hit(&project, &VIEW, None, rect.x - 1.0, y),
                 Hit::Nothing,
                 "between"
             );
-            assert_eq!(hit(&project, None, pan.x + pan.width, y), Hit::Nothing);
-            assert_eq!(hit(&project, None, pan.x - 1.0, y), Hit::Nothing);
-            assert_eq!(hit(&project, None, rect.x + rect.width, y), Hit::Nothing);
-            assert_eq!(hit(&project, None, x, rect.y + rect.height), Hit::Nothing);
-            assert_eq!(hit(&project, None, x, rect.y - 1.0), Hit::Nothing);
             assert_eq!(
-                hit(&project, None, solo.x + solo.width, solo.y),
+                hit(&project, &VIEW, None, pan.x + pan.width, y),
                 Hit::Nothing
             );
-            assert_eq!(hit(&project, None, mute.x - 1.0, mute.y), Hit::Nothing);
+            assert_eq!(hit(&project, &VIEW, None, pan.x - 1.0, y), Hit::Nothing);
+            assert_eq!(
+                hit(&project, &VIEW, None, rect.x + rect.width, y),
+                Hit::Nothing
+            );
+            assert_eq!(
+                hit(&project, &VIEW, None, x, rect.y + rect.height),
+                Hit::Nothing
+            );
+            assert_eq!(hit(&project, &VIEW, None, x, rect.y - 1.0), Hit::Nothing);
+            assert_eq!(
+                hit(&project, &VIEW, None, solo.x + solo.width, solo.y),
+                Hit::Nothing
+            );
+            assert_eq!(
+                hit(&project, &VIEW, None, mute.x - 1.0, mute.y),
+                Hit::Nothing
+            );
         }
         let below = lane_top(project.track_count()) + 30.0;
-        assert_eq!(hit(&project, None, 30.0, below), Hit::Nothing);
+        assert_eq!(hit(&project, &VIEW, None, 30.0, below), Hit::Nothing);
     }
 
     #[test]
@@ -593,13 +673,13 @@ mod tests {
         let project = project();
         let shown: Vec<_> = project
             .notes(0)
-            .filter_map(|note| Some((note, note_rect(&project, note)?)))
+            .filter_map(|note| Some((note, note_rect(WINDOW_HEIGHT, note)?)))
             .collect();
         assert_eq!(shown.len(), 3, "the note above the roll is not shown");
         for (note, rect) in shown {
             let (x, y) = center(rect);
             assert_eq!(
-                hit(&project, Some(0), x, y),
+                hit(&project, &VIEW, Some(0), x, y),
                 Hit::Note {
                     id: 0,
                     start: note.start,
@@ -614,17 +694,20 @@ mod tests {
         let project = project();
         let y = lane_top(0) + LANE_HEIGHT / 2.0;
         assert_eq!(
-            hit(&project, None, HEADER_WIDTH, y),
+            hit(&project, &VIEW, None, HEADER_WIDTH, y),
             Hit::Clip { id: 0, tick: 0 }
         );
         assert_eq!(
-            hit(&project, None, HEADER_WIDTH + 4.0 * BEAT_WIDTH, y),
+            hit(&project, &VIEW, None, HEADER_WIDTH + 4.0 * BEAT_WIDTH, y),
             Hit::Lane {
                 track: 0,
                 tick: 4 * PPQ
             }
         );
-        assert_eq!(hit(&project, None, HEADER_WIDTH - 1.0, y), Hit::Nothing);
+        assert_eq!(
+            hit(&project, &VIEW, None, HEADER_WIDTH - 1.0, y),
+            Hit::Nothing
+        );
     }
 
     #[test]
@@ -632,47 +715,163 @@ mod tests {
         let project = project();
         let x = HEADER_WIDTH + 1.0;
         assert_eq!(
-            hit(&project, None, x, lane_top(1)),
+            hit(&project, &VIEW, None, x, lane_top(1)),
             Hit::Lane { track: 1, tick: 30 }
         );
-        assert_eq!(hit(&project, None, x, lane_top(2)), Hit::Nothing);
-        assert_eq!(hit(&project, None, x, TIMELINE_TOP - 1.0), Hit::Nothing);
+        assert_eq!(hit(&project, &VIEW, None, x, lane_top(2)), Hit::Nothing);
+        assert_eq!(
+            hit(&project, &VIEW, None, x, TIMELINE_TOP - 1.0),
+            Hit::Nothing
+        );
     }
 
     #[test]
-    fn the_roll_lies_below_the_lanes_and_spans_the_clip_and_its_pitches() {
+    fn the_roll_lies_above_the_footer_and_spans_the_clip_and_its_pitches() {
         let project = project();
         let clip = project.clips()[0];
-        // The roll starts under its ruler, below the last lane.
-        let (left, top) = (HEADER_WIDTH, lane_top(2) + ROLL_RULER_HEIGHT);
-        let (right, bottom) = (left + roll_width(&clip), top + roll_height());
-        let inside = |x, y| !matches!(hit(&project, Some(0), x, y), Hit::Nothing);
+        let (left, bottom) = (HEADER_WIDTH, WINDOW_HEIGHT - FOOTER_HEIGHT);
+        let (right, top) = (left + roll_width(&clip), bottom - roll_height());
+        let inside = |x, y| !matches!(hit(&project, &VIEW, Some(0), x, y), Hit::Nothing);
         assert!(inside(left, top));
         assert!(inside(right - 1.0, bottom - 1.0));
         assert!(!inside(left, top - 1.0));
         assert!(!inside(left, bottom));
         assert!(!inside(right, top));
-        assert_eq!(row_top(&project, HIGHEST_PITCH), top);
-        assert_eq!(row_top(&project, LOWEST_PITCH) + ROW_HEIGHT, bottom);
+        assert!(!inside(left - 1.0, top), "the keyboard adds no note");
+        assert_eq!(row_top(WINDOW_HEIGHT, HIGHEST_PITCH), top);
+        assert_eq!(row_top(WINDOW_HEIGHT, LOWEST_PITCH) + ROW_HEIGHT, bottom);
+        // The roll's ruler lies between the lanes and the roll.
+        let lanes = lanes_rect(&VIEW, true);
+        assert_eq!(lanes.y + lanes.height + ROLL_RULER_HEIGHT, top);
+        assert_eq!(
+            lanes_rect(&VIEW, false).y + lanes_rect(&VIEW, false).height,
+            bottom
+        );
+    }
+
+    /// `tracks` tracks, with a bar at beat 0 on the last.
+    fn tracks(tracks: u64) -> Project {
+        let mut history = History::default();
+        for _ in 0..tracks {
+            history.edit(Edit::Apply(Command::AddTrack)).unwrap();
+        }
+        let clip = Command::AddClip {
+            track: tracks - 1,
+            start: 0,
+            length: 4 * PPQ,
+        };
+        history.edit(Edit::Apply(clip)).unwrap();
+        history.present().clone()
     }
 
     #[test]
-    fn with_four_tracks_the_roll_fits_above_the_footer_of_a_new_window() {
-        let mut history = History::default();
-        for _ in 0..4 {
-            history.edit(Edit::Apply(Command::AddTrack)).unwrap();
-        }
-        let bottom = roll_top(history.present()) + roll_height();
-        assert!(bottom <= WINDOW_HEIGHT - FOOTER_HEIGHT, "{bottom}");
+    fn with_many_tracks_the_roll_keeps_its_place_above_the_footer() {
+        let project = tracks(10);
+        let y = row_top(WINDOW_HEIGHT, 60) + ROW_HEIGHT / 2.0;
+        assert!(
+            lane_top(10) > y,
+            "the lanes as unscrolled reach past the roll"
+        );
+        assert_eq!(
+            hit(&project, &VIEW, Some(0), HEADER_WIDTH + 1.0, y),
+            Hit::Roll {
+                id: 0,
+                tick: 10,
+                pitch: 60
+            }
+        );
+        // Without the roll, the lanes reach the footer.
+        assert_eq!(
+            hit(&project, &VIEW, None, HEADER_WIDTH + 1.0, y),
+            Hit::Lane {
+                track: ((y - TIMELINE_TOP) / LANE_HEIGHT) as u64,
+                tick: 30
+            }
+        );
+        assert_eq!(
+            hit(
+                &project,
+                &VIEW,
+                None,
+                HEADER_WIDTH + 1.0,
+                WINDOW_HEIGHT - FOOTER_HEIGHT
+            ),
+            Hit::Nothing
+        );
+    }
+
+    #[test]
+    fn the_lanes_scroll_until_the_last_ends_at_the_bottom_of_their_space() {
+        let project = tracks(10);
+        let shown = |rolled| lanes_rect(&VIEW, rolled).height;
+        assert_eq!(
+            max_scroll(&project, &VIEW, true),
+            10.0 * LANE_HEIGHT - shown(true)
+        );
+        assert_eq!(
+            max_scroll(&project, &VIEW, false),
+            10.0 * LANE_HEIGHT - shown(false)
+        );
+        assert_eq!(max_scroll(&tracks(2), &VIEW, true), 0.0, "two tracks fit");
+        // A window too short for the roll shows no lanes, and they still
+        // scroll no further than their length.
+        let short = View {
+            height: 300.0,
+            ..VIEW
+        };
+        assert_eq!(lanes_rect(&short, true).height, 0.0);
+        assert_eq!(max_scroll(&project, &short, true), 10.0 * LANE_HEIGHT);
+    }
+
+    #[test]
+    fn a_scrolled_lane_is_hit_where_it_is_drawn() {
+        let project = tracks(10);
+        let view = View {
+            scroll: max_scroll(&project, &VIEW, true) - 10.0,
+            ..VIEW
+        };
+        let shown = |rect: Rect| {
+            (
+                rect.x + rect.width / 2.0,
+                rect.y - view.scroll + rect.height / 2.0,
+            )
+        };
+        let (x, y) = shown(clip_rect(&project.clips()[0]));
+        assert!(
+            matches!(hit(&project, &view, Some(0), x, y), Hit::Clip { id: 0, .. }),
+            "the clip on the last track"
+        );
+        assert_eq!(track_at(&project, &view, Some(0), y), Some(9));
+        let (x, y) = shown(mute_rect(6));
+        assert_eq!(hit(&project, &view, Some(0), x, y), Hit::Mute { track: 6 });
+        // The lanes are cut at the ruler: a lane scrolled under it is not hit.
+        let x = HEADER_WIDTH + 1.0;
+        assert_eq!(
+            hit(&project, &view, None, x, TIMELINE_TOP - 1.0),
+            Hit::Nothing
+        );
+        assert_eq!(track_at(&project, &view, None, TIMELINE_TOP - 1.0), None);
+        assert_eq!(
+            hit(&project, &view, None, x, TIMELINE_TOP),
+            Hit::Lane { track: 5, tick: 30 }
+        );
+        // And at the roll's ruler.
+        let below = lanes_rect(&view, true).y + lanes_rect(&view, true).height;
+        assert_eq!(hit(&project, &view, Some(0), x, below), Hit::Nothing);
+        assert_eq!(track_at(&project, &view, Some(0), below), None);
+        assert_eq!(
+            track_at(&project, &view, None, below),
+            Some(((below + view.scroll - TIMELINE_TOP) / LANE_HEIGHT) as u64)
+        );
     }
 
     #[test]
     fn a_note_spans_from_its_start_up_to_its_stop() {
         let project = project();
-        let y = row_top(&project, 60) + ROW_HEIGHT / 2.0;
+        let y = row_top(WINDOW_HEIGHT, 60) + ROW_HEIGHT / 2.0;
         let at_beat = |beats: f32| HEADER_WIDTH + beats * ROLL_BEAT_WIDTH;
         assert_eq!(
-            hit(&project, Some(0), at_beat(1.0), y),
+            hit(&project, &VIEW, Some(0), at_beat(1.0), y),
             Hit::Note {
                 id: 0,
                 start: PPQ,
@@ -680,7 +879,7 @@ mod tests {
             }
         );
         assert_eq!(
-            hit(&project, Some(0), at_beat(2.0), y),
+            hit(&project, &VIEW, Some(0), at_beat(2.0), y),
             Hit::Roll {
                 id: 0,
                 tick: 2 * PPQ,
@@ -712,7 +911,7 @@ mod tests {
     fn without_a_selected_clip_there_is_no_roll() {
         let project = project();
         assert_eq!(
-            hit(&project, None, HEADER_WIDTH, roll_top(&project)),
+            hit(&project, &VIEW, None, HEADER_WIDTH, roll_top(WINDOW_HEIGHT)),
             Hit::Nothing
         );
     }

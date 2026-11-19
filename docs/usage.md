@@ -1,12 +1,14 @@
 # Usage
 
 The window shows a bar of transport controls at the top, a timeline of tracks
-and MIDI clips under a ruler, a piano roll for the selected clip, and the keys
-or the latest message at the bottom. Use `Cmd` instead of `Ctrl` on macOS.
+and MIDI clips under a ruler, a piano roll for the selected clip above the
+bottom, and the keys or the latest message at the bottom. Use `Cmd` instead of `Ctrl` on macOS.
 
 ## Editing
 
 - `T` adds a track, and a double click on a lane adds a one-bar clip.
+- The mouse wheel or a trackpad over the tracks scrolls them when they do not
+  all fit. A new track scrolls into view.
 - Dragging a clip moves it by whole beats, also to another track.
 - `S` splits the selected clip at the beat under the pointer, and `Delete`
   deletes it.
