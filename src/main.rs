@@ -482,7 +482,7 @@ impl Pathos {
                 .bg(rgb(CONTROL))
                 .child(editor::volume_label(self.editor.volume(Fader::Master))),
         );
-        elements.extend(meter_view(width, self.meter.levels()));
+        elements.extend(meter_view(width, &self.meter));
         elements
     }
 }
@@ -559,15 +559,21 @@ fn toggle_view(rect: Rect, label: &'static str, key: &'static str, on: bool) -> 
     }
 }
 
-/// The meter of each channel in its zones, a line at full scale and the
-/// scale below (ADR 25).
-fn meter_view(width: f32, levels: [f32; 2]) -> Vec<Div> {
+/// The meter of each channel in its zones with a mark at its held peak, a
+/// line at full scale and the scale below (ADR 25, ADR 30).
+fn meter_view(width: f32, meter: &Meter) -> Vec<Div> {
     let decibels = |decibels: f32| 10f32.powf(decibels / 20.0);
     let left = layout::meter_rect(width, 0);
     let at_level = |level: f32| left.width * meter::fraction(level);
     let (high, full) = (at_level(decibels(-6.0)), at_level(1.0));
     let mut elements = Vec::new();
-    for (channel, level) in levels.into_iter().enumerate() {
+    let zones = [
+        (high, METER_LOW),
+        (full, METER_HIGH),
+        (f32::INFINITY, ERROR),
+    ];
+    let channels = meter.levels().into_iter().zip(meter.holds());
+    for (channel, (level, hold)) in channels.enumerate() {
         let rect = layout::meter_rect(width, channel);
         let filled = at_level(level);
         let zone = |from: f32, to: f32, color: u32| {
@@ -590,6 +596,19 @@ fn meter_view(width: f32, levels: [f32; 2]) -> Vec<Div> {
             })
             .bg(rgb(PANEL)),
         );
+        // The held peak, in the color of its zone (ADR 30).
+        let held = at_level(hold);
+        if held > 0.0 {
+            let (_, color) = zones.into_iter().find(|&(to, _)| held <= to).unwrap();
+            elements.push(
+                at(Rect {
+                    x: rect.x + (held - 1.0).clamp(0.0, rect.width - 2.0),
+                    width: 2.0,
+                    ..rect
+                })
+                .bg(rgb(color)),
+            );
+        }
     }
     let below = layout::meter_rect(width, 1);
     elements.extend([-60.0, -24.0, -12.0, -6.0, 0.0, 6.0].map(|level: f32| {
