@@ -43,7 +43,7 @@ impl Meter {
                 level: fall(hold.level, falling),
                 age: hold.age + elapsed,
             };
-            if peak > 0.0 && peak >= hold.level {
+            if peak >= hold.level {
                 *hold = Hold {
                     level: peak,
                     age: Duration::ZERO,

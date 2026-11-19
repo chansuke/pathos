@@ -597,17 +597,10 @@ fn meter_view(width: f32, meter: &Meter) -> Vec<Div> {
             .bg(rgb(PANEL)),
         );
         // The held peak, in the color of its zone (ADR 30).
-        let held = at_level(hold);
-        if held > 0.0 {
-            let (_, color) = zones.into_iter().find(|&(to, _)| held <= to).unwrap();
-            elements.push(
-                at(Rect {
-                    x: rect.x + (held - 1.0).clamp(0.0, rect.width - 2.0),
-                    width: 2.0,
-                    ..rect
-                })
-                .bg(rgb(color)),
-            );
+        if let Some(mark) = layout::hold_rect(width, channel, meter::fraction(hold)) {
+            let held = mark.x - rect.x;
+            let (_, color) = zones.into_iter().find(|&(to, _)| held < to).unwrap();
+            elements.push(at(mark).bg(rgb(color)));
         }
     }
     let below = layout::meter_rect(width, 1);

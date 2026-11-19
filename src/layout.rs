@@ -224,6 +224,18 @@ pub fn meter_rect(width: f32, channel: usize) -> Rect {
     }
 }
 
+/// The mark of the peak held in `channel` at `fraction` of the meter's
+/// length (ADR 30): two pixels wide, centered on that point but inside the
+/// meter, or `None` when nothing is held.
+pub fn hold_rect(width: f32, channel: usize, fraction: f32) -> Option<Rect> {
+    let meter = meter_rect(width, channel);
+    (fraction > 0.0).then(|| Rect {
+        x: meter.x + (fraction * meter.width - 1.0).clamp(0.0, meter.width - 2.0),
+        width: 2.0,
+        ..meter
+    })
+}
+
 /// The solo button of a track, at the right of its upper row.
 pub fn solo_rect(track: u64) -> Rect {
     Rect {
@@ -653,6 +665,27 @@ mod tests {
         // A wider window moves them right by as much.
         assert_eq!(master_rect(width + 100.0).x, master.x + 100.0);
         assert_eq!(meter_rect(width + 100.0, 1).x, right.x + 100.0);
+    }
+
+    #[test]
+    fn a_held_peak_is_marked_on_its_meter() {
+        let width = 1200.0;
+        let meter = meter_rect(width, 1);
+        assert_eq!(hold_rect(width, 1, 0.0), None, "nothing held");
+        let half = hold_rect(width, 1, 0.5).unwrap();
+        assert_eq!(
+            half,
+            Rect {
+                x: meter.x + meter.width / 2.0 - 1.0,
+                width: 2.0,
+                ..meter
+            }
+        );
+        assert_eq!(hold_rect(width, 0, 0.5).unwrap().y, meter_rect(width, 0).y);
+        // At the ends, the mark stays inside the meter.
+        assert_eq!(hold_rect(width, 1, 0.001).unwrap().x, meter.x);
+        let full = hold_rect(width, 1, 1.0).unwrap();
+        assert_eq!(full.x + full.width, meter.x + meter.width);
     }
 
     #[test]
