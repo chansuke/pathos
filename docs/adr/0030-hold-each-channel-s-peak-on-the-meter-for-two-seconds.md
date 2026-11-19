@@ -1,7 +1,7 @@
 ---
 number: 30
 title: Hold each channel's peak on the meter for two seconds
-status: proposed
+status: accepted
 date: 2026-11-19
 ---
 
