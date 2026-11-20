@@ -1,7 +1,7 @@
 ---
 number: 34
 title: Run the comparison with REAPER locally, not in CI
-status: proposed
+status: accepted
 date: 2026-11-20
 ---
 
@@ -50,8 +50,9 @@ Two checks keep the comparison from being forgotten:
   `core.hooksPath`, runs the comparison before a push that changes those
   crates, and remembers the code that has passed so as not to run it again;
   and
-* a CI job fails a pull request that changes those crates unless its
-  description has the line `REAPER comparison: passed`.
+* a CI job, `stated`, which the ruleset of `main` requires, fails a pull
+  request that changes those crates unless its description has the line
+  `REAPER comparison: passed`.
 
 The tests run one REAPER at a time: two at once sometimes left a WAV file cut
 short, and the license allows one computer at a time.
