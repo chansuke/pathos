@@ -1,0 +1,48 @@
+#!/bin/sh
+# Compares with REAPER before a push that changes the core, the render or the
+# converter, since CI does not (ADR 34). A commit whose code has passed is not
+# compared again. `git push --no-verify` skips this.
+set -eu
+
+paths="crates/pathos-core crates/pathos-render crates/pathos-reaper"
+zero=0000000000000000000000000000000000000000
+passed="$(git rev-parse --git-path pathos-reaper-passed)"
+status=0
+
+while read -r local_ref local_sha _remote_ref _remote_sha; do
+  # A deleted branch.
+  [ "$local_sha" = "$zero" ] && continue
+  base="$(git merge-base "$local_sha" origin/main 2>/dev/null)" || continue
+  # $paths is split into one argument per path on purpose.
+  # shellcheck disable=SC2086
+  git diff --quiet "$base" "$local_sha" -- $paths && continue
+
+  # The trees of the paths identify the code that was compared.
+  # shellcheck disable=SC2086
+  key="$(for path in $paths; do git rev-parse "$local_sha:$path"; done | tr '\n' ' ')"
+  grep -qxF "$key" "$passed" 2>/dev/null && continue
+
+  if [ "$(uname -s)" != Linux ]; then
+    echo "pre-push: $local_ref changes $paths; compare it with REAPER on Linux before its pull request (ADR 34)" >&2
+    continue
+  fi
+  # shellcheck disable=SC2086
+  if [ "$local_sha" != "$(git rev-parse HEAD)" ] || [ -n "$(git status --porcelain -- $paths)" ]; then
+    echo "pre-push: check out $local_ref without changes to $paths, so that the comparison with REAPER tests what is pushed" >&2
+    status=1
+    continue
+  fi
+
+  echo "pre-push: comparing $local_ref with REAPER (ADR 34)" >&2
+  # Git sends the refs on standard input, which the comparison must not read.
+  if nix develop .#reaper -c cargo test -p pathos-reaper -- --ignored </dev/null >&2; then
+    echo "$key" >>"$passed"
+    echo "pre-push: put this line in the description of the pull request:" >&2
+    echo "REAPER comparison: passed" >&2
+  else
+    echo "pre-push: the comparison with REAPER failed" >&2
+    status=1
+  fi
+done
+
+exit "$status"

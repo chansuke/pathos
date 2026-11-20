@@ -101,6 +101,13 @@
           default = pkgs.mkShell (
             {
               inputsFrom = [ self.packages.${stdenv.hostPlatform.system}.default ];
+              # The pre-push hook compares with REAPER before a push that
+              # changes the render (ADR 34).
+              shellHook = ''
+                if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+                  git config core.hooksPath .githooks
+                fi
+              '';
               packages =
                 with pkgs;
                 [
