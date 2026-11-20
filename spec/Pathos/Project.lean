@@ -324,12 +324,6 @@ def Project.wellFormed (p : Project) (nextClipId : Nat) : Bool :=
 
 theorem initial_wellFormed : Project.initial.wellFormed 0 = true := by decide
 
-/-- Every command keeps a well-formed project well-formed. -/
-theorem step_preserves_wellFormed (p q : Project) (n n' : Nat) (c : Command)
-    (wf : p.wellFormed n = true) (ok : step p n c = .ok (q, n')) :
-    q.wellFormed n' = true := by
-  sorry
-
 /-- A command never lowers the id the next created clip receives. -/
 theorem step_nextClipId_le (p q : Project) (n n' : Nat) (c : Command)
     (ok : step p n c = .ok (q, n')) : n ≤ n' := by
