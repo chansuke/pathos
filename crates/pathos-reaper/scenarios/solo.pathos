@@ -1,0 +1,13 @@
+add-track
+add-track
+add-track
+add-clip 0 0 3840
+add-clip 1 0 3840
+add-clip 2 0 3840
+add-note 0 0 1920 60 100
+add-note 1 480 1920 64 100
+add-note 2 960 1920 67 100
+solo-track 0
+solo-track 2
+set-track-pan 0 0
+set-track-pan 2 200

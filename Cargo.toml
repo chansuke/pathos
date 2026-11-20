@@ -15,7 +15,12 @@ pathos-playback = { path = "crates/pathos-playback", version = "0.1.0" }
 pathos-render = { path = "crates/pathos-render", version = "0.1.0" }
 
 [workspace]
-members = ["crates/pathos-core", "crates/pathos-playback", "crates/pathos-render"]
+members = [
+    "crates/pathos-core",
+    "crates/pathos-playback",
+    "crates/pathos-reaper",
+    "crates/pathos-render",
+]
 
 [workspace.package]
 version = "0.1.0"

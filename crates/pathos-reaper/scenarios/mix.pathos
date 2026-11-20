@@ -1,0 +1,20 @@
+add-track
+add-track
+add-track
+add-clip 0 0 7680
+add-clip 1 960 5760
+add-clip 2 0 3840
+add-note 0 0 960 69 127
+add-note 0 2400 1000 60 90
+add-note 0 4000 700 64 100
+add-note 1 100 480 76 64
+add-note 1 2900 1500 67 127
+add-note 2 0 1920 50 127
+set-track-volume 0 700
+set-track-pan 0 160
+set-track-volume 1 1300
+set-track-pan 1 30
+mute-track 2
+set-master-volume 800
+set-tempo 1920 400000
+set-tempo 4500 731111

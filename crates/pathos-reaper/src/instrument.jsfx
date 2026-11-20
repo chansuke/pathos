@@ -1,0 +1,98 @@
+desc:pathos built-in instrument (ADR 33)
+// A copy of the instrument of pathos-render: a triangle wave that fades in
+// and out over max(rate / 200, 1) frames. It reports the fade as its latency
+// and outputs each frame that long after it, when it knows whether the note
+// stops within the fade. With impulses set, it outputs 1 on the left channel
+// at each note-on and on the right at each note-off instead.
+in_pin:none
+out_pin:left
+out_pin:right
+
+@init
+impulses = IMPULSES;
+ramp = max(floor(srate / 200), 1);
+pdc_delay = ramp;
+pdc_bot_ch = 0;
+pdc_top_ch = 2;
+// A note-off that has not arrived yet.
+NONE = 2 ^ 52;
+VOICES = 256;
+freq = 0;
+v_on = 128;
+v_off = v_on + VOICES;
+v_step = v_off + VOICES;
+v_level = v_step + VOICES;
+v_pitch = v_level + VOICES;
+v_used = v_pitch + VOICES;
+ev_offset = v_used + VOICES;
+ev_status = ev_offset + 1024;
+ev_pitch = ev_status + 1024;
+ev_velocity = ev_pitch + 1024;
+memset(v_used, 0, VOICES);
+//FREQUENCIES
+// The frame of the input, counted from the start of playback.
+t = 0;
+
+@block
+events = 0;
+while (events < 1024 && midirecv(offset, status, pitch, velocity)) (
+  ev_offset[events] = offset;
+  ev_status[events] = status & 0xF0;
+  ev_pitch[events] = pitch;
+  ev_velocity[events] = velocity;
+  events += 1;
+);
+frame = 0;
+next = 0;
+
+@sample
+while (next < events && ev_offset[next] <= frame) (
+  status = ev_status[next];
+  pitch = ev_pitch[next];
+  status == 0x90 && ev_velocity[next] > 0 ? (
+    i = 0;
+    while (i < VOICES && v_used[i]) (i += 1);
+    i < VOICES ? (
+      v_used[i] = 1;
+      v_on[i] = t;
+      v_off[i] = NONE;
+      v_pitch[i] = pitch;
+      cycles = freq[pitch] / srate;
+      v_step[i] = cycles - floor(cycles);
+      v_level[i] = ev_velocity[next] / 127;
+    );
+  ) : status == 0x80 || status == 0x90 ? (
+    i = 0;
+    while (i < VOICES && !(v_used[i] && v_pitch[i] == pitch && v_off[i] == NONE)) (i += 1);
+    i < VOICES ? v_off[i] = t;
+  );
+  next += 1;
+);
+// The frame that is output now.
+e = t - ramp;
+left = 0;
+right = 0;
+i = 0;
+loop(VOICES,
+  v_used[i] ? (
+    impulses ? (
+      // A note that starts and stops at the same frame is not heard.
+      v_on[i] != v_off[i] ? (
+        e == v_on[i] ? left += 1;
+        e == v_off[i] ? right += 1;
+      );
+    ) : e >= v_on[i] && e < v_off[i] ? (
+      since = e - v_on[i];
+      envelope = min(min((since + 1) / ramp, (v_off[i] - e) / ramp), 1);
+      cycles = since * v_step[i];
+      phase = cycles - floor(cycles);
+      left += v_level[i] * envelope * (4 * abs(phase - 0.5) - 1);
+    );
+    e >= v_off[i] ? v_used[i] = 0;
+  );
+  i += 1;
+);
+spl0 = left;
+spl1 = impulses ? right : left;
+t += 1;
+frame += 1;
