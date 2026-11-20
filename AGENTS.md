@@ -34,10 +34,12 @@ Commands:
 - `cargo test -p pathos-core`: check the Rust core against the model. Build the
   model first. `PROPTEST_CASES` sets the number of generated traces.
 - `nix develop .#reaper -c cargo test -p pathos-reaper -- --ignored`: compare
-  the scenarios and generated projects with REAPER (ADR 33), on Linux. When
-  REAPER disagrees, the cause is pathos, the converter or the JSFX
-  instrument; record a deliberate difference in an ADR, and do not loosen the
-  layers to make a failure go away.
+  the scenarios and generated projects with REAPER (ADR 33), on Linux. CI does
+  not run it (ADR 34): run it before opening a pull request that changes
+  `crates/pathos-core`, `crates/pathos-render` or `crates/pathos-reaper`, and
+  state the result in the description. When REAPER disagrees, the cause is
+  pathos, the converter or the JSFX instrument; record a deliberate difference
+  in an ADR, and do not loosen the layers to make a failure go away.
 - `grep -rw sorry spec --include='*.lean' | wc -l`: count unfinished proofs.
 - `cd spec && lake env lean --run Audit.lean`: regenerate `theorems.txt`, which
   marks each theorem proved or unfinished and checks its axioms, and

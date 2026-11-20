@@ -40,6 +40,10 @@ REAPER:
 nix develop .#reaper -c cargo test -p pathos-reaper -- --ignored
 ```
 
+CI does not run it (ADR 34). Run it before opening a pull request that
+changes `crates/pathos-core`, `crates/pathos-render` or `crates/pathos-reaper`,
+and state the result in the description.
+
 REAPER is not free software. Its evaluation lasts 60 days, after which a
 license is needed.
 
