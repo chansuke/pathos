@@ -43,9 +43,10 @@ is (ADR 21). -/
 def Project.heard (p : Project) (track : Nat) : Bool :=
   !p.muted track && (p.soloed track || !p.tracks.any (·.solo))
 
-/-- The sample of `tick` at `rate` samples per second, rounded down once. -/
+/-- The sample of `tick` at `rate` samples per second, rounded once to the
+nearest sample, a half up (ADR 32). -/
 def Project.sampleOf (p : Project) (rate : Nat) (tick : Tick) : Nat :=
-  microsTimesPpq p.tempo tick * rate / (ppq * 1000000)
+  (microsTimesPpq p.tempo tick * rate + ppq * 500000) / (ppq * 1000000)
 
 /-- The events of every note at `rate` samples per second, in order. A note
 that starts and stops at the same sample is not heard and has no events, since
@@ -106,6 +107,7 @@ theorem schedule_solo (p : Project) (rate : Nat) (e : Event)
 /-- A later tick never lies at an earlier sample. -/
 theorem sampleOf_monotone (p : Project) (rate : Nat) (a b : Tick) (le : a ≤ b) :
     p.sampleOf rate a ≤ p.sampleOf rate b :=
-  Nat.div_le_div_right (Nat.mul_le_mul_right _ (microsTimesPpq_monotone p.tempo a b le))
+  Nat.div_le_div_right
+    (Nat.add_le_add_right (Nat.mul_le_mul_right _ (microsTimesPpq_monotone p.tempo a b le)) _)
 
 end Pathos

@@ -26,7 +26,7 @@ Pathos.Project.heard [def] 342bb0d49ce8a7db
 Pathos.Project.initial [def] 9bd2696c1abd5ef2
 Pathos.Project.muted [def] 0a74b97aba84d506
 Pathos.Project.replaceClip [def] 71670ef5a66ebe94
-Pathos.Project.sampleOf [def] d995f79a724220c5
+Pathos.Project.sampleOf [def] 13e4fcb1271034fa
 Pathos.Project.schedule [def] e188806756dea45d
 Pathos.Project.soloed [def] cfe929c1e289d10c
 Pathos.Project.tickToMicros [def] bb2f75fcef743cc4
