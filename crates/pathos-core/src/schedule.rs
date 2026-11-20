@@ -54,18 +54,28 @@ impl TempoMap {
     /// It does not allocate. It does not overflow for a tick up to a beat past
     /// [`MAX_TICK`](crate::MAX_TICK).
     pub fn sample_of(&self, rate: u64, tick: Tick) -> u128 {
+        let time = self.micros_times_ppq(tick);
+        // The product of the time and the rate can exceed `u128`, so the time
+        // is split by the divisor first; the result is the same.
+        let divisor = u128::from(PPQ) * 1_000_000;
+        let rate = u128::from(rate);
+        time / divisor * rate + time % divisor * rate / divisor
+    }
+
+    /// The time of `tick` in microseconds from the start, rounded down.
+    pub fn micros(&self, tick: Tick) -> u128 {
+        self.micros_times_ppq(tick) / u128::from(PPQ)
+    }
+
+    /// [`PPQ`] times the microseconds from the start to `tick`.
+    fn micros_times_ppq(&self, tick: Tick) -> u128 {
         // The first change is at tick 0, so one starts on or before `tick`.
         let index = self
             .changes
             .partition_point(|(change, _)| change.tick <= tick)
             - 1;
         let (change, start) = self.changes[index];
-        let time = start + u128::from(tick - change.tick) * u128::from(change.us_per_quarter);
-        // The product of the time and the rate can exceed `u128`, so the time
-        // is split by the divisor first; the result is the same.
-        let divisor = u128::from(PPQ) * 1_000_000;
-        let rate = u128::from(rate);
-        time / divisor * rate + time % divisor * rate / divisor
+        start + u128::from(tick - change.tick) * u128::from(change.us_per_quarter)
     }
 }
 
