@@ -350,7 +350,8 @@ pub fn playhead_x(project: &Project, sample_rate: NonZeroU32, frame: u64) -> f32
 
 /// The last tick that starts at or before frame `frame` at `sample_rate`.
 pub fn tick_at(project: &Project, sample_rate: NonZeroU32, frame: u64) -> Tick {
-    let at = |tick: Tick| project.tick_to_micros(tick) * u128::from(sample_rate.get()) / 1_000_000;
+    let tempo = project.tempo_map();
+    let at = |tick: Tick| tempo.micros(tick) * u128::from(sample_rate.get()) / 1_000_000;
     let (mut low, mut high) = (0, MAX_TICK);
     while low < high {
         let middle = low + (high - low).div_ceil(2);

@@ -571,26 +571,9 @@ impl Project {
         Ok((next, next_clip_id))
     }
 
-    /// The time of `tick` in microseconds from the start, rounded down.
+    /// The time of `tick` in microseconds from the start, rounded down. To
+    /// time many ticks, build a [`TempoMap`](crate::TempoMap) once instead.
     pub fn tick_to_micros(&self, tick: Tick) -> u128 {
-        self.micros_times_ppq(tick) / u128::from(PPQ)
-    }
-
-    /// [`PPQ`] times the microseconds from the start to `tick`.
-    pub(crate) fn micros_times_ppq(&self, tick: Tick) -> u128 {
-        let mut micros_times_ppq: u128 = 0;
-        for (index, change) in self.tempo.iter().enumerate() {
-            // Each tempo applies up to the next change, the last one forever.
-            let end = match self.tempo.get(index + 1) {
-                Some(next) if tick > next.tick => next.tick,
-                _ => tick,
-            };
-            micros_times_ppq +=
-                u128::from(end.saturating_sub(change.tick)) * u128::from(change.us_per_quarter);
-            if end == tick {
-                break;
-            }
-        }
-        micros_times_ppq
+        self.tempo_map().micros(tick)
     }
 }
