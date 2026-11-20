@@ -1,6 +1,7 @@
 Pathos.Clip [type] 818f959c5edbd9d5
 Pathos.Clip.overlaps [def] 98470696a045a3c2
 Pathos.Clip.stop [def] 37305072754cdc73
+Pathos.ClipOk [def] 95a81d3f28756028
 Pathos.Command [type] 87077085ddf9af9b
 Pathos.Edit [type] fda82eefb207dada
 Pathos.Error [type] 0aafb5b28c53c8f5
@@ -19,6 +20,7 @@ Pathos.Note [type] 144de7a96be0129f
 Pathos.Note.before [def] 28f97099c902758b
 Pathos.Note.overlaps [def] 64207fc76fe3cc1b
 Pathos.Note.stop [def] 5f0205bbd013f82b
+Pathos.NoteOk [def] 56b30fa38455a526
 Pathos.Project [type] 9545cf20ba6332c4
 Pathos.Project.collides [def] bbb951ac899984f2
 Pathos.Project.findClip [def] 6d62862afd54388b
