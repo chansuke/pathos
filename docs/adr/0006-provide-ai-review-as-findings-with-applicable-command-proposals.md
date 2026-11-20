@@ -1,7 +1,7 @@
 ---
 number: 6
 title: Provide AI review as findings with applicable command proposals
-status: proposed
+status: accepted
 date: 2026-11-12
 ---
 
