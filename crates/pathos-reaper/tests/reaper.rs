@@ -57,7 +57,9 @@ fn render_with_reaper(project: &Project, rate: u32, frames: u64, layer: Layer) -
     let command = std::env::var("PATHOS_REAPER").unwrap_or_else(|_| "reaper".into());
     let mut words = command.split_whitespace();
     // A test that failed while holding the lock leaves nothing to clean up.
-    let running = REAPER.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let running = REAPER
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let output = Process::new(words.next().expect("a command for REAPER"))
         .args(words)
         .arg("-cfgfile")
