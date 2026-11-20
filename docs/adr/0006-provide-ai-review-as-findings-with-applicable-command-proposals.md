@@ -1,7 +1,7 @@
 ---
 number: 6
 title: Provide AI review as findings with applicable command proposals
-status: proposed
+status: accepted
 date: 2026-11-12
 ---
 
@@ -36,7 +36,16 @@ phase correlation. It returns findings, each anchored to a track and a time
 range, optionally with a list of commands (ADR 2) that would address it. The
 user applies or dismisses each proposal. Review is available by default.
 
-This ADR stays proposed until the open question below is settled.
+A review may send the render itself, per track and on the master, to an
+external service along with the project state and the measurements, since
+audio allows a deeper analysis than measurements alone. Audio leaves the
+machine only with the user's consent:
+
+* the first review of a project that would send audio asks for consent, and
+  names the service and what is sent;
+* consent is given per project and can be withdrawn at any time;
+* without consent, the review sends only the project state and the
+  measurements, and says that its findings are limited by that.
 
 ### Consequences
 
@@ -45,12 +54,15 @@ This ADR stays proposed until the open question below is settled.
 * Good, because the measurement functions are pure and can be tested exactly.
 * Bad, because the quality of findings cannot be specified formally and needs
   an evaluation set of projects with known problems.
-* Bad, because review depends on a deterministic offline render, which does not
-  exist yet.
+* Bad, because unreleased audio leaves the machine once the user consents, and
+  is then subject to the service's terms.
+* Neutral, because review depends on the deterministic offline render (ADR 15),
+  which exists.
 
 ### Confirmation
 
-Not yet defined.
+Tests of review check that no audio is sent for a project without its
+consent, and that withdrawing consent stops it.
 
 ## Pros and Cons of the Options
 
@@ -71,6 +83,7 @@ Not yet defined.
 
 ## More Information
 
-Open question: what a review may send to an external service. Sending only
-measurements keeps unreleased audio local; sending audio allows deeper analysis.
-The choice and how consent is obtained are not decided.
+An earlier version of this ADR left open what a review may send to an
+external service. Sending only measurements keeps unreleased audio local;
+sending audio allows deeper analysis. Audio is sent, with consent given per
+project.
