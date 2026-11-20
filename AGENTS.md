@@ -33,6 +33,11 @@ Commands:
 - `lake -d spec build`: build the model and its executable.
 - `cargo test -p pathos-core`: check the Rust core against the model. Build the
   model first. `PROPTEST_CASES` sets the number of generated traces.
+- `nix develop .#reaper -c cargo test -p pathos-reaper -- --ignored`: compare
+  the scenarios and generated projects with REAPER (ADR 33), on Linux. When
+  REAPER disagrees, the cause is pathos, the converter or the JSFX
+  instrument; record a deliberate difference in an ADR, and do not loosen the
+  layers to make a failure go away.
 - `grep -rw sorry spec --include='*.lean' | wc -l`: count unfinished proofs.
 - `cd spec && lake env lean --run Audit.lean`: regenerate `theorems.txt`, which
   marks each theorem proved or unfinished and checks its axioms, and
