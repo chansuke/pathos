@@ -1,7 +1,7 @@
 ---
 number: 8
 title: Scan CI workflows and dependencies for vulnerabilities
-status: proposed
+status: accepted
 date: 2026-11-12
 ---
 
