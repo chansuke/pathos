@@ -44,13 +44,26 @@ conversion without REAPER (ADR 33). A pull request that changes
 `nix develop .#reaper -c cargo test -p pathos-reaper -- --ignored` before it is
 opened, and states the result in its description.
 
+Two checks keep the comparison from being forgotten:
+
+* a pre-push hook in `.githooks`, which the dev shell enables with
+  `core.hooksPath`, runs the comparison before a push that changes those
+  crates, and remembers the code that has passed so as not to run it again;
+  and
+* a CI job fails a pull request that changes those crates unless its
+  description has the line `REAPER comparison: passed`.
+
+The tests run one REAPER at a time: two at once sometimes left a WAV file cut
+short, and the license allows one computer at a time.
+
 ### Consequences
 
 * Good, because REAPER runs only where its license clearly allows.
 * Good, because no runner executes code from pull requests on a personal
   computer.
-* Bad, because nothing enforces the comparison; a change can reach `main`
-  without it if the rule is forgotten.
+* Bad, because the checks rely on honesty: `git push --no-verify` skips the
+  hook, a clone outside the dev shell has no hook, a branch updated on GitHub
+  is not compared, and the line in the description is not proof of a run.
 * Bad, because the comparison runs only on Linux, where the dev shell `.#reaper`
   exists.
 * Neutral, because the decision is revisited if Cockos confirms that CI may
@@ -58,8 +71,8 @@ opened, and states the result in its description.
 
 ### Confirmation
 
-`AGENTS.md` names the command and when to run it, and each such pull request
-states its result.
+`AGENTS.md` names the command and when to run it, the hook runs it, and the
+CI job checks that each such pull request states its result.
 
 ## Pros and Cons of the Options
 
