@@ -3,10 +3,16 @@
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+    # REAPER 7.83 crashes when it renders a project; 7.86 does not (ADR 33).
+    nixpkgs-reaper.url = "github:nixos/nixpkgs/nixpkgs-unstable";
   };
 
   outputs =
-    { self, nixpkgs }:
+    {
+      self,
+      nixpkgs,
+      nixpkgs-reaper,
+    }:
     let
       systems = [
         "x86_64-linux"
@@ -86,8 +92,12 @@
         let
           inherit (pkgs) lib stdenv;
           cargoTarget = stdenv.hostPlatform.rust.cargoEnvVarTarget;
-        in
-        {
+          # REAPER is unfree, and only it is allowed here.
+          reaper =
+            (import nixpkgs-reaper {
+              inherit (stdenv.hostPlatform) system;
+              config.allowUnfreePredicate = package: lib.getName package == "reaper";
+            }).reaper;
           default = pkgs.mkShell (
             {
               inputsFrom = [ self.packages.${stdenv.hostPlatform.system}.default ];
@@ -118,6 +128,19 @@
               RUSTFLAGS = "-C link-arg=-fuse-ld=mold";
             }
           );
+        in
+        {
+          inherit default;
+        }
+        # The comparison with REAPER (ADR 33) renders on a virtual display.
+        // lib.optionalAttrs stdenv.hostPlatform.isLinux {
+          reaper = default.overrideAttrs (old: {
+            nativeBuildInputs = old.nativeBuildInputs ++ [
+              reaper
+              pkgs.xvfb-run
+            ];
+            PATHOS_REAPER = "xvfb-run -a reaper";
+          });
         }
       );
 
