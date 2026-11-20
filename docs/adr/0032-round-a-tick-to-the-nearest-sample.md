@@ -1,7 +1,7 @@
 ---
 number: 32
 title: Round a tick to the nearest sample
-status: proposed
+status: accepted
 date: 2026-11-20
 ---
 
