@@ -740,6 +740,28 @@ fn core_agrees_with_model_on_boundaries() {
             Request::Micros(2880),
             Request::Micros(u64::MAX),
         ],
+        // A tick rounds to the nearest sample, a half up (ADR 32): at 44.1 kHz
+        // and 120 BPM ticks 15, 16 and 17 lie 0.53, 0.5 and 0.47 past a
+        // sample.
+        vec![
+            apply(AddTrack),
+            add_clip(0, 960),
+            apply(AddNote {
+                id: 0,
+                start: 15,
+                length: 1,
+                pitch: 60,
+                velocity: 100,
+            }),
+            apply(AddNote {
+                id: 0,
+                start: 17,
+                length: 1,
+                pitch: 62,
+                velocity: 100,
+            }),
+            Request::Schedule(44_100),
+        ],
         // Ids are not reused, and an accepted command clears redo.
         vec![
             apply(AddTrack),

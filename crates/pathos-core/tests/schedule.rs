@@ -66,6 +66,19 @@ fn notes_start_and_stop_at_their_samples() {
     );
 }
 
+/// A tick lies at the nearest sample, and an exact half rounds up (ADR 32).
+/// At 44.1 kHz and 120 BPM a tick lasts 22.96875 samples.
+#[test]
+fn a_tick_rounds_to_the_nearest_sample() {
+    let tempo = History::default().present().tempo_map();
+    // 344.53 samples.
+    assert_eq!(tempo.sample_of(44_100, 15), 345);
+    // 367.5 samples.
+    assert_eq!(tempo.sample_of(44_100, 16), 368);
+    // 390.47 samples.
+    assert_eq!(tempo.sample_of(44_100, 17), 390);
+}
+
 /// A note shorter than a sample is not heard.
 #[test]
 fn a_note_within_one_sample_has_no_events() {
@@ -79,9 +92,10 @@ fn a_note_within_one_sample_has_no_events() {
             length: 960,
         },
     );
-    add_note(&mut history, 0, 0, 960, 60, 100);
-    // At 1 Hz the whole note lies within the first second.
+    add_note(&mut history, 0, 0, 480, 60, 100);
+    // At 1 Hz both ends of the note, a quarter of a second long, round to the
+    // first sample.
     assert_eq!(history.present().schedule(1), []);
-    // At 2 Hz it covers the first sample.
+    // At 2 Hz its end rounds up to the second sample, so it covers the first.
     assert_eq!(history.present().schedule(2).len(), 2);
 }
