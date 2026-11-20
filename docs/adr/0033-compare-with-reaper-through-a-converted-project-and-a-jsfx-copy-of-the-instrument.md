@@ -1,7 +1,7 @@
 ---
 number: 33
 title: Compare with REAPER through a converted project and a JSFX copy of the instrument
-status: proposed
+status: accepted
 date: 2026-11-20
 ---
 
