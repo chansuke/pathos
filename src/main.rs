@@ -4,6 +4,7 @@ mod layout;
 mod meter;
 mod readout;
 
+use std::borrow::Cow;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -64,6 +65,9 @@ const READOUT: u32 = 0x0f1113;
 /// The meter's zones: up to -6 dB, up to full scale, and past it.
 const METER_LOW: u32 = 0x57b97a;
 const METER_HIGH: u32 = 0xe2b54a;
+/// The bundled font of the numbers and the keys, whose digits keep one width
+/// (ADR 31).
+const MONO: &str = "JetBrains Mono";
 
 /// The keys the footer lists, with what each does. The loop's and the
 /// metronome's are on their buttons and the track's on the ruler.
@@ -480,6 +484,7 @@ impl Pathos {
                 .border_1()
                 .border_color(rgb(GRID))
                 .bg(rgb(CONTROL))
+                .font_family(MONO)
                 .child(editor::volume_label(self.editor.volume(Fader::Master))),
         );
         elements.extend(meter_view(width, &self.meter));
@@ -504,6 +509,7 @@ fn key_cap(key: &'static str) -> Div {
         .border_b_2()
         .border_color(rgb(CONTROL_BORDER))
         .bg(rgb(CONTROL))
+        .font_family(MONO)
         .text_size(px(11.0))
         .text_color(rgb(SOFT_TEXT))
         .child(key)
@@ -511,7 +517,7 @@ fn key_cap(key: &'static str) -> Div {
 
 /// The position, the time and the tempo, each under its caption.
 fn readout_view(position: &str, time: &str, tempo: &str) -> Div {
-    let cell = |name: &'static str, value: &str, width: f32| {
+    let cell = |name: &'static str, value: &str, weight: FontWeight, width: f32| {
         div()
             .w(px(width))
             .h_full()
@@ -520,7 +526,13 @@ fn readout_view(position: &str, time: &str, tempo: &str) -> Div {
             .flex_col()
             .justify_center()
             .child(caption(name))
-            .child(div().text_size(px(16.0)).child(value.to_string()))
+            .child(
+                div()
+                    .font_family(MONO)
+                    .font_weight(weight)
+                    .text_size(px(16.0))
+                    .child(value.to_string()),
+            )
     };
     at(layout::readout_rect())
         .flex()
@@ -528,11 +540,11 @@ fn readout_view(position: &str, time: &str, tempo: &str) -> Div {
         .border_1()
         .border_color(rgb(GRID))
         .bg(rgb(READOUT))
-        .child(cell("Bar", position, 92.0))
+        .child(cell("Bar", position, FontWeight::MEDIUM, 92.0))
         .child(div().w(px(1.0)).h_full().bg(rgb(GRID)))
-        .child(cell("Time", time, 108.0))
+        .child(cell("Time", time, FontWeight::NORMAL, 108.0))
         .child(div().w(px(1.0)).h_full().bg(rgb(GRID)))
-        .child(cell("Tempo", tempo, 82.0))
+        .child(cell("Tempo", tempo, FontWeight::NORMAL, 82.0))
 }
 
 /// A button that turns something on and off, with its key.
@@ -614,6 +626,7 @@ fn meter_view(width: f32, meter: &Meter) -> Vec<Div> {
         })
         .flex()
         .justify_center()
+        .font_family(MONO)
         .text_size(px(9.0))
         .text_color(rgb(SUBTLE_TEXT))
         .child(if level > 0.0 {
@@ -689,6 +702,7 @@ fn ruler(
                     width: 4.0 * BEAT_WIDTH - 8.0,
                     height: 14.0,
                 })
+                .font_family(MONO)
                 .text_size(px(11.0))
                 .text_color(rgb(SUBTLE_TEXT))
                 .child((beat / 4 + 1).to_string()),
@@ -1037,6 +1051,7 @@ fn pan_view(track: u64, pan: u8) -> [Div; 4] {
         })
         .flex()
         .justify_center()
+        .font_family(MONO)
         .text_size(px(10.0))
         .text_color(rgb(SUBTLE_TEXT))
         .child(editor::pan_label(pan)),
@@ -1079,6 +1094,7 @@ fn fader_view(track: u64, volume: u16) -> [Div; 4] {
         .flex()
         .items_center()
         .justify_end()
+        .font_family(MONO)
         .text_size(px(11.0))
         .child(editor::volume_label(volume)),
     ]
@@ -1210,6 +1226,7 @@ fn piano_roll(project: &Project, id: u64, width: f32, height: f32) -> Div {
             .pl(px(6.0))
             .border_l_1()
             .border_color(rgb(CONTROL_BORDER))
+            .font_family(MONO)
             .text_size(px(10.0))
             .text_color(rgb(SUBTLE_TEXT))
             .child(readout::beat_label(clip.start + beat * PPQ)),
@@ -1255,6 +1272,7 @@ fn piano_roll(project: &Project, id: u64, width: f32, height: f32) -> Div {
                 } else {
                     WHITE_KEY_LINE
                 }))
+                .font_family(MONO)
                 .text_size(px(7.0))
                 .text_color(rgb(BLACK_KEY))
                 .children((pitch % 12 == 0).then(|| format!("C{}", i32::from(pitch / 12) - 1)))
@@ -1329,6 +1347,12 @@ fn key(event: &KeyDownEvent) -> Option<Key> {
 
 fn main() {
     Application::new().run(|cx: &mut App| {
+        cx.text_system()
+            .add_fonts(vec![
+                Cow::Borrowed(include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf")),
+                Cow::Borrowed(include_bytes!("../assets/fonts/JetBrainsMono-Medium.ttf")),
+            ])
+            .expect("gpui rejected the bundled JetBrains Mono");
         let bounds = Bounds::centered(None, size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)), cx);
         cx.open_window(
             WindowOptions {
