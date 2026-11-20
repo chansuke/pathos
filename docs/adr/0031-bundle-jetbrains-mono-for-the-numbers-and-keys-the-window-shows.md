@@ -1,7 +1,7 @@
 ---
 number: 31
 title: Bundle JetBrains Mono for the numbers and keys the window shows
-status: proposed
+status: accepted
 date: 2026-11-20
 ---
 
