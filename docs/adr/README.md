@@ -30,3 +30,4 @@
 * [30. Hold each channel's peak on the meter for two seconds](0030-hold-each-channel-s-peak-on-the-meter-for-two-seconds.md)
 * [31. Bundle JetBrains Mono for the numbers and keys the window shows](0031-bundle-jetbrains-mono-for-the-numbers-and-keys-the-window-shows.md)
 * [32. Round a tick to the nearest sample](0032-round-a-tick-to-the-nearest-sample.md)
+* [33. Compare with REAPER through a converted project and a JSFX copy of the instrument](0033-compare-with-reaper-through-a-converted-project-and-a-jsfx-copy-of-the-instrument.md)

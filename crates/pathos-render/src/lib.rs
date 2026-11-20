@@ -17,8 +17,9 @@ use pathos_core::{
 pub mod wav;
 
 /// The frequency of each MIDI pitch in hertz, in equal temperament with A4
-/// (pitch 69) at 440 Hz.
-const FREQUENCIES: [f32; 128] = frequencies();
+/// (pitch 69) at 440 Hz. The JSFX copy of the instrument takes them from here
+/// (ADR 33).
+pub const FREQUENCIES: [f32; 128] = frequencies();
 
 const fn frequencies() -> [f32; 128] {
     // 2^(1/12), rounded to the nearest f32.

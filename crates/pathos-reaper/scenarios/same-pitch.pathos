@@ -1,0 +1,12 @@
+add-track
+add-clip 0 0 7680
+add-note 0 0 480 60 100
+add-note 0 480 480 60 50
+add-note 0 960 240 60 127
+add-note 0 960 960 64 100
+add-note 0 960 960 67 100
+add-note 0 1200 1 60 100
+add-note 0 2000 1 72 100
+add-note 0 2001 1 72 100
+add-note 0 3000 3000 48 127
+add-note 0 3000 3000 36 127

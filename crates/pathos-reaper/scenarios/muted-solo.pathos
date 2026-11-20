@@ -1,0 +1,19 @@
+add-track
+add-clip 0 0 3840
+set-track-volume 0 1402
+set-master-volume 1513
+solo-track 0
+add-track
+solo-track 1
+add-note 0 2102 28 65 100
+add-note 0 2568 235 55 45
+set-track-pan 0 166
+add-clip 0 7216 2515
+set-tempo 5233 811768
+add-clip 1 3187 3443
+set-track-volume 0 1381
+add-note 0 1355 519 65 2
+unmute-track 0
+add-note 2 1421 294 54 23
+add-note 0 1572 240 83 5
+mute-track 0

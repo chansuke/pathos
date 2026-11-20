@@ -1,0 +1,13 @@
+add-track
+set-tempo 0 731111
+set-tempo 1001 517003
+set-tempo 2500 999999
+set-tempo 4000 250001
+add-clip 0 0 7680
+add-note 0 37 113 60 127
+add-note 0 600 401 62 100
+add-note 0 990 20 64 90
+add-note 0 1500 1001 65 80
+add-note 0 2499 2 67 70
+add-note 0 3000 1700 69 127
+add-note 0 4700 2900 71 60

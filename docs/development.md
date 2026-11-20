@@ -29,6 +29,20 @@ cargo run -p pathos-render --example render -- phrase.wav
 On Linux, the dev shell points ALSA at the PipeWire and PulseAudio plugins from
 nixpkgs, since the host's own plugins do not load into Nix's alsa-lib.
 
+## Comparison with REAPER
+
+On Linux, the dev shell `.#reaper` adds REAPER and a virtual display, and the
+ignored tests of `pathos-reaper` render each scenario in
+`crates/pathos-reaper/scenarios` and generated projects with pathos and with
+REAPER:
+
+```sh
+nix develop .#reaper -c cargo test -p pathos-reaper -- --ignored
+```
+
+REAPER is not free software. Its evaluation lasts 60 days, after which a
+license is needed.
+
 ## Pinned dependencies
 
 `Cargo.lock` pins `libc` to 0.2.189 because gpui 0.2.2 depends on an `xattr`

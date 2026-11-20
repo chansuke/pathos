@@ -1,0 +1,14 @@
+add-track
+add-track
+add-clip 0 0 3840
+add-note 0 0 480 60 100
+add-note 0 960 480 62 100
+add-note 0 2000 960 64 100
+split-clip 0 1920
+move-clip 1 1 2880
+add-clip 0 4800 960
+add-note 2 100 333 71 80
+delete-clip 2
+undo
+add-clip 1 0 960
+delete-clip 3

@@ -1,0 +1,17 @@
+[package]
+name = "pathos-reaper"
+description = "The comparison of pathos with REAPER (ADR 7, ADR 33)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+pathos-core = { path = "../pathos-core", version = "0.1.0" }
+pathos-render = { path = "../pathos-render", version = "0.1.0" }
+
+[dev-dependencies]
+proptest = "1"
+hound = "3"

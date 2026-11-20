@@ -4056,6 +4056,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pathos-reaper"
+version = "0.1.0"
+dependencies = [
+ "hound",
+ "pathos-core",
+ "pathos-render",
+ "proptest",
+]
+
+[[package]]
 name = "pathos-render"
 version = "0.1.0"
 dependencies = [
