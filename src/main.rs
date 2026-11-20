@@ -4,14 +4,16 @@ mod layout;
 mod meter;
 mod readout;
 
+use std::borrow::Cow;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use gpui::{
     App, Application, Bounds, Context, Div, FocusHandle, FontWeight, KeyDownEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathPromptOptions, PromptLevel, Rgba, Task,
-    TitlebarOptions, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, rgba, size,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathPromptOptions, PromptLevel, Rgba,
+    ScrollWheelEvent, Task, TitlebarOptions, Window, WindowBounds, WindowOptions, div, prelude::*,
+    px, rgb, rgba, size,
 };
 use pathos_core::{CENTER_PAN, Clip, Document, PPQ, Project, Tick, UNITY_VOLUME};
 use pathos_playback::output::Output;
@@ -63,6 +65,9 @@ const READOUT: u32 = 0x0f1113;
 /// The meter's zones: up to -6 dB, up to full scale, and past it.
 const METER_LOW: u32 = 0x57b97a;
 const METER_HIGH: u32 = 0xe2b54a;
+/// The bundled font of the numbers and the keys, whose digits keep one width
+/// (ADR 31).
+const MONO: &str = "JetBrains Mono";
 
 /// The keys the footer lists, with what each does. The loop's and the
 /// metronome's are on their buttons and the track's on the ruler.
@@ -479,9 +484,10 @@ impl Pathos {
                 .border_1()
                 .border_color(rgb(GRID))
                 .bg(rgb(CONTROL))
+                .font_family(MONO)
                 .child(editor::volume_label(self.editor.volume(Fader::Master))),
         );
-        elements.extend(meter_view(width, self.meter.levels()));
+        elements.extend(meter_view(width, &self.meter));
         elements
     }
 }
@@ -503,6 +509,7 @@ fn key_cap(key: &'static str) -> Div {
         .border_b_2()
         .border_color(rgb(CONTROL_BORDER))
         .bg(rgb(CONTROL))
+        .font_family(MONO)
         .text_size(px(11.0))
         .text_color(rgb(SOFT_TEXT))
         .child(key)
@@ -510,7 +517,7 @@ fn key_cap(key: &'static str) -> Div {
 
 /// The position, the time and the tempo, each under its caption.
 fn readout_view(position: &str, time: &str, tempo: &str) -> Div {
-    let cell = |name: &'static str, value: &str, width: f32| {
+    let cell = |name: &'static str, value: &str, weight: FontWeight, width: f32| {
         div()
             .w(px(width))
             .h_full()
@@ -519,7 +526,13 @@ fn readout_view(position: &str, time: &str, tempo: &str) -> Div {
             .flex_col()
             .justify_center()
             .child(caption(name))
-            .child(div().text_size(px(16.0)).child(value.to_string()))
+            .child(
+                div()
+                    .font_family(MONO)
+                    .font_weight(weight)
+                    .text_size(px(16.0))
+                    .child(value.to_string()),
+            )
     };
     at(layout::readout_rect())
         .flex()
@@ -527,11 +540,11 @@ fn readout_view(position: &str, time: &str, tempo: &str) -> Div {
         .border_1()
         .border_color(rgb(GRID))
         .bg(rgb(READOUT))
-        .child(cell("Bar", position, 92.0))
+        .child(cell("Bar", position, FontWeight::MEDIUM, 92.0))
         .child(div().w(px(1.0)).h_full().bg(rgb(GRID)))
-        .child(cell("Time", time, 108.0))
+        .child(cell("Time", time, FontWeight::NORMAL, 108.0))
         .child(div().w(px(1.0)).h_full().bg(rgb(GRID)))
-        .child(cell("Tempo", tempo, 82.0))
+        .child(cell("Tempo", tempo, FontWeight::NORMAL, 82.0))
 }
 
 /// A button that turns something on and off, with its key.
@@ -558,15 +571,21 @@ fn toggle_view(rect: Rect, label: &'static str, key: &'static str, on: bool) -> 
     }
 }
 
-/// The meter of each channel in its zones, a line at full scale and the
-/// scale below (ADR 25).
-fn meter_view(width: f32, levels: [f32; 2]) -> Vec<Div> {
+/// The meter of each channel in its zones with a mark at its held peak, a
+/// line at full scale and the scale below (ADR 25, ADR 30).
+fn meter_view(width: f32, meter: &Meter) -> Vec<Div> {
     let decibels = |decibels: f32| 10f32.powf(decibels / 20.0);
     let left = layout::meter_rect(width, 0);
     let at_level = |level: f32| left.width * meter::fraction(level);
     let (high, full) = (at_level(decibels(-6.0)), at_level(1.0));
     let mut elements = Vec::new();
-    for (channel, level) in levels.into_iter().enumerate() {
+    let zones = [
+        (high, METER_LOW),
+        (full, METER_HIGH),
+        (f32::INFINITY, ERROR),
+    ];
+    let channels = meter.levels().into_iter().zip(meter.holds());
+    for (channel, (level, hold)) in channels.enumerate() {
         let rect = layout::meter_rect(width, channel);
         let filled = at_level(level);
         let zone = |from: f32, to: f32, color: u32| {
@@ -589,6 +608,12 @@ fn meter_view(width: f32, levels: [f32; 2]) -> Vec<Div> {
             })
             .bg(rgb(PANEL)),
         );
+        // The held peak, in the color of its zone (ADR 30).
+        if let Some(mark) = layout::hold_rect(width, channel, meter::fraction(hold)) {
+            let held = mark.x - rect.x;
+            let (_, color) = zones.into_iter().find(|&(to, _)| held < to).unwrap();
+            elements.push(at(mark).bg(rgb(color)));
+        }
     }
     let below = layout::meter_rect(width, 1);
     elements.extend([-60.0, -24.0, -12.0, -6.0, 0.0, 6.0].map(|level: f32| {
@@ -601,6 +626,7 @@ fn meter_view(width: f32, levels: [f32; 2]) -> Vec<Div> {
         })
         .flex()
         .justify_center()
+        .font_family(MONO)
         .text_size(px(9.0))
         .text_color(rgb(SUBTLE_TEXT))
         .child(if level > 0.0 {
@@ -676,6 +702,7 @@ fn ruler(
                     width: 4.0 * BEAT_WIDTH - 8.0,
                     height: 14.0,
                 })
+                .font_family(MONO)
                 .text_size(px(11.0))
                 .text_color(rgb(SUBTLE_TEXT))
                 .child((beat / 4 + 1).to_string()),
@@ -766,7 +793,7 @@ impl Render for Pathos {
         }
         let width = f32::from(window.viewport_size().width);
         let height = f32::from(window.viewport_size().height);
-        self.editor.resize(width);
+        self.editor.resize(width, height);
         let status = match (self.editor.rejected(), &self.notice, &self.output) {
             (Some(error), _, _) => Some((error.to_string(), true)),
             (None, Some(Notice::Saved(path)), _) => {
@@ -804,6 +831,8 @@ impl Render for Pathos {
         };
         let top_bar = self.top_bar(width, tick, frame, cx);
         let project = self.editor.history().present();
+        let view = self.editor.view();
+        let shown = layout::lanes_rect(&view, selected.is_some());
 
         div()
             .size_full()
@@ -858,30 +887,44 @@ impl Render for Pathos {
                     this.handle(Input::Up { x, y }, cx);
                 }),
             )
+            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
+                let (x, y) = (f32::from(event.position.x), f32::from(event.position.y));
+                // A line of a wheel is a third of a lane, so a notch of three
+                // lines scrolls one lane.
+                let delta = event.delta.pixel_delta(px(LANE_HEIGHT / 3.0));
+                if this.editor.scroll(x, y, -f32::from(delta.y)) {
+                    cx.notify();
+                }
+            }))
             .children(top_bar)
             .children(ruler(project, self.looping.as_ref(), playhead, width))
-            .children(lanes(&self.editor, width))
-            .children(
-                project
-                    .clips()
-                    .iter()
-                    .map(|clip| clip_view(project, clip, Some(clip.id) == selected)),
-            )
-            .children(
-                self.looping
-                    .as_ref()
-                    .map(|ticks| at(layout::loop_rect(project, ticks)).bg(rgba(LOOP))),
-            )
-            .children(selected.map(|id| piano_roll(project, id, width)))
-            .children(playhead.map(|x| {
-                at(Rect {
-                    x,
-                    y: TIMELINE_TOP,
-                    width: 1.0,
-                    height: project.track_count() as f32 * LANE_HEIGHT,
-                })
-                .bg(rgb(PLAYHEAD))
-            }))
+            .child(scrolled(
+                shown,
+                view.scroll,
+                lanes(&self.editor, width)
+                    .into_iter()
+                    .chain(
+                        project
+                            .clips()
+                            .iter()
+                            .map(|clip| clip_view(project, clip, Some(clip.id) == selected)),
+                    )
+                    .chain(
+                        self.looping
+                            .as_ref()
+                            .map(|ticks| at(layout::loop_rect(project, ticks)).bg(rgba(LOOP))),
+                    )
+                    .chain(playhead.map(|x| {
+                        at(Rect {
+                            x,
+                            y: TIMELINE_TOP,
+                            width: 1.0,
+                            height: project.track_count() as f32 * LANE_HEIGHT,
+                        })
+                        .bg(rgb(PLAYHEAD))
+                    })),
+            ))
+            .children(selected.map(|id| piano_roll(project, id, width, height)))
             .child(footer(status, width, height))
     }
 }
@@ -1008,6 +1051,7 @@ fn pan_view(track: u64, pan: u8) -> [Div; 4] {
         })
         .flex()
         .justify_center()
+        .font_family(MONO)
         .text_size(px(10.0))
         .text_color(rgb(SUBTLE_TEXT))
         .child(editor::pan_label(pan)),
@@ -1050,6 +1094,7 @@ fn fader_view(track: u64, volume: u16) -> [Div; 4] {
         .flex()
         .items_center()
         .justify_end()
+        .font_family(MONO)
         .text_size(px(11.0))
         .child(editor::volume_label(volume)),
     ]
@@ -1126,11 +1171,11 @@ fn thumbnail(project: &Project, clip: &Clip, color: Rgba) -> Vec<Div> {
 /// The piano roll of the clip `id`: a ruler naming the clip and numbering its
 /// beats, a keyboard, a row per pitch, a line per sixteenth, stronger on a
 /// beat, and the notes in the color of the clip's track (ADR 28).
-fn piano_roll(project: &Project, id: u64, width: f32) -> Div {
+fn piano_roll(project: &Project, id: u64, width: f32, height: f32) -> Div {
     let Some(clip) = project.clips().iter().find(|clip| clip.id == id) else {
         return div();
     };
-    let top = layout::roll_top(project);
+    let top = layout::roll_top(height);
     let ruler = top - ROLL_RULER_HEIGHT;
     let roll_width = layout::roll_width(clip);
     let bar = clip.start / (4 * PPQ) + 1;
@@ -1181,13 +1226,14 @@ fn piano_roll(project: &Project, id: u64, width: f32) -> Div {
             .pl(px(6.0))
             .border_l_1()
             .border_color(rgb(CONTROL_BORDER))
+            .font_family(MONO)
             .text_size(px(10.0))
             .text_color(rgb(SUBTLE_TEXT))
             .child(readout::beat_label(clip.start + beat * PPQ)),
         );
     }
     for pitch in LOWEST_PITCH..=HIGHEST_PITCH {
-        let y = layout::row_top(project, pitch);
+        let y = layout::row_top(height, pitch);
         let black = matches!(pitch % 12, 1 | 3 | 6 | 8 | 10);
         let row = at(Rect {
             x: HEADER_WIDTH,
@@ -1226,6 +1272,7 @@ fn piano_roll(project: &Project, id: u64, width: f32) -> Div {
                 } else {
                     WHITE_KEY_LINE
                 }))
+                .font_family(MONO)
                 .text_size(px(7.0))
                 .text_color(rgb(BLACK_KEY))
                 .children((pitch % 12 == 0).then(|| format!("C{}", i32::from(pitch / 12) - 1)))
@@ -1249,7 +1296,7 @@ fn piano_roll(project: &Project, id: u64, width: f32) -> Div {
     elements.extend(
         project
             .notes(id)
-            .filter_map(|note| layout::note_rect(project, note))
+            .filter_map(|note| layout::note_rect(height, note))
             .map(|rect| {
                 at(rect)
                     .rounded(px(2.0))
@@ -1259,6 +1306,19 @@ fn piano_roll(project: &Project, id: u64, width: f32) -> Div {
             }),
     );
     div().children(elements)
+}
+
+/// The space `shown` of the window, which shows `elements` moved up by
+/// `scroll` and cuts them at its edges (ADR 29). The elements are placed in
+/// window coordinates as if nothing were scrolled.
+fn scrolled(shown: Rect, scroll: f32, elements: impl IntoIterator<Item = Div>) -> Div {
+    at(shown).overflow_hidden().child(
+        div()
+            .absolute()
+            .left(px(-shown.x))
+            .top(px(-shown.y - scroll))
+            .children(elements),
+    )
 }
 
 /// An element placed at `rect` of its parent.
@@ -1287,6 +1347,12 @@ fn key(event: &KeyDownEvent) -> Option<Key> {
 
 fn main() {
     Application::new().run(|cx: &mut App| {
+        cx.text_system()
+            .add_fonts(vec![
+                Cow::Borrowed(include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf")),
+                Cow::Borrowed(include_bytes!("../assets/fonts/JetBrainsMono-Medium.ttf")),
+            ])
+            .expect("gpui rejected the bundled JetBrains Mono");
         let bounds = Bounds::centered(None, size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)), cx);
         cx.open_window(
             WindowOptions {
