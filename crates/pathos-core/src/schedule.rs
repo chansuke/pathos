@@ -50,16 +50,16 @@ pub struct TempoMap {
 }
 
 impl TempoMap {
-    /// The sample of `tick` at `rate` samples per second, rounded down once.
-    /// It does not allocate. It does not overflow for a tick up to a beat past
-    /// [`MAX_TICK`](crate::MAX_TICK).
+    /// The sample of `tick` at `rate` samples per second, rounded once to the
+    /// nearest sample, a half up (ADR 32). It does not allocate. It does not
+    /// overflow for a tick up to a beat past [`MAX_TICK`](crate::MAX_TICK).
     pub fn sample_of(&self, rate: u64, tick: Tick) -> u128 {
         let time = self.micros_times_ppq(tick);
         // The product of the time and the rate can exceed `u128`, so the time
         // is split by the divisor first; the result is the same.
         let divisor = u128::from(PPQ) * 1_000_000;
         let rate = u128::from(rate);
-        time / divisor * rate + time % divisor * rate / divisor
+        time / divisor * rate + (time % divisor * rate + divisor / 2) / divisor
     }
 
     /// The time of `tick` in microseconds from the start, rounded down.
