@@ -8,6 +8,7 @@
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::process::Command as Process;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use pathos_core::{Command, Document, Edit, Event, Project};
@@ -32,6 +33,10 @@ fn scratch_directory() -> PathBuf {
     directory
 }
 
+/// Held while REAPER runs. Two REAPERs rendering at once sometimes left a WAV
+/// file cut short, and the license allows one computer at a time (ADR 34).
+static REAPER: Mutex<()> = Mutex::new(());
+
 /// The first `frames` frames of `project` at `rate`, rendered by REAPER.
 fn render_with_reaper(project: &Project, rate: u32, frames: u64, layer: Layer) -> Vec<Frame> {
     let directory = scratch_directory();
@@ -51,6 +56,8 @@ fn render_with_reaper(project: &Project, rate: u32, frames: u64, layer: Layer) -
 
     let command = std::env::var("PATHOS_REAPER").unwrap_or_else(|_| "reaper".into());
     let mut words = command.split_whitespace();
+    // A test that failed while holding the lock leaves nothing to clean up.
+    let running = REAPER.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let output = Process::new(words.next().expect("a command for REAPER"))
         .args(words)
         .arg("-cfgfile")
@@ -60,6 +67,13 @@ fn render_with_reaper(project: &Project, rate: u32, frames: u64, layer: Layer) -
         .current_dir(&directory)
         .output()
         .unwrap_or_else(|error| panic!("cannot run {command:?}: {error}"));
+    drop(running);
+    assert!(
+        output.status.success(),
+        "REAPER failed with {}:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
     let wav = directory
         .join(RENDER_DIRECTORY)
         .join(format!("{RENDER_NAME}.wav"));
