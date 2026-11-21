@@ -1,7 +1,7 @@
 ---
 number: 35
 title: Connect agents to the running app through a local socket and an MCP server, as proposals the user accepts
-status: proposed
+status: accepted
 date: 2026-11-21
 ---
 
