@@ -4033,9 +4033,20 @@ name = "pathos"
 version = "0.1.0"
 dependencies = [
  "gpui",
+ "pathos-agent",
  "pathos-core",
  "pathos-playback",
  "pathos-render",
+]
+
+[[package]]
+name = "pathos-agent"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "pathos-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

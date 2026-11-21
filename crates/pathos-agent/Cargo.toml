@@ -1,0 +1,18 @@
+[package]
+name = "pathos-agent"
+description = "How agents read the open project of pathos and propose commands to it (ADR 5, ADR 35)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+futures = { version = "0.3", default-features = false, features = ["std"] }
+pathos-core = { path = "../pathos-core", version = "0.1.0" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+futures = { version = "0.3", default-features = false, features = ["executor"] }

@@ -5,6 +5,7 @@
 use std::borrow::Cow;
 use std::ops::Range;
 
+use pathos_agent::Proposals;
 use pathos_core::{
     CENTER_PAN, Command, Document, Edit, EditError, History, MAX_PAN, MAX_VOLUME, PPQ, Project,
     Tick, UNITY_VOLUME,
@@ -262,6 +263,14 @@ impl Editor {
         }
     }
 
+    /// Applies the proposal of an agent that the window shows (ADR 35), and
+    /// returns whether the project changed.
+    pub fn apply_proposal(&mut self, proposals: &mut Proposals) -> bool {
+        let edits = self.document.edits().len();
+        self.rejected = proposals.apply(&mut self.document).err();
+        self.document.edits().len() != edits
+    }
+
     /// Handles `input` and returns whether the project changed.
     pub fn handle(&mut self, input: Input) -> bool {
         let Some(edit) = self.edit_for(input) else {
@@ -515,6 +524,27 @@ mod tests {
     fn click(editor: &mut Editor, (x, y): (f32, f32), clicks: usize) {
         editor.handle(Input::Down { x, y, clicks });
         editor.handle(Input::Up { x, y });
+    }
+
+    #[test]
+    fn a_proposal_is_applied_only_while_the_project_is_as_it_was() {
+        let mut editor = Editor::default();
+        let mut proposals = Proposals::default();
+        let lines = ["add-track".to_string(), "add-clip 0 0 3840".to_string()];
+        proposals
+            .propose(editor.document(), String::new(), &lines)
+            .unwrap();
+        assert!(editor.apply_proposal(&mut proposals));
+        assert_eq!(editor.document().save(), "add-track\nadd-clip 0 0 3840\n");
+        assert_eq!(editor.rejected(), None);
+
+        proposals
+            .propose(editor.document(), String::new(), &lines[..1])
+            .unwrap();
+        editor.handle(Input::Key(Key::AddTrack));
+        // The new track made the proposal stale.
+        assert!(!editor.apply_proposal(&mut proposals));
+        assert_eq!(editor.history().present().track_count(), 2);
     }
 
     fn drag(editor: &mut Editor, (x, y): (f32, f32), (to_x, to_y): (f32, f32)) {
