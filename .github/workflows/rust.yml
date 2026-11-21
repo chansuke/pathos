@@ -31,6 +31,9 @@ jobs:
       # The editor and the layout are plain Rust, so their tests need no window.
       - name: Test the app
         run: nix develop -c cargo test -p pathos
+      # The socket, the proposals and the MCP server need no window (ADR 35).
+      - name: Test the agent interface
+        run: nix develop -c cargo test -p pathos-agent
       # The comparison with REAPER itself runs locally, not here (ADR 34);
       # the conversion needs no REAPER.
       - name: Test the conversion to REAPER projects
