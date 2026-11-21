@@ -55,3 +55,24 @@ bottom, and the keys or the latest message at the bottom. Use `Cmd` instead of `
 - A project file lists the edits that built the project, one per line, so undo
   still works after reopening it.
 - Closing the window with unsaved changes asks whether to save them first.
+
+## Agents
+
+An agent, such as a coding assistant, can read the open project and propose
+edits to it through `pathos-mcp`, an MCP server (ADR 5, ADR 35). Build it and
+register it with the agent, for example with Claude Code:
+
+```sh
+nix build
+claude mcp add pathos -- "$PWD/result/bin/pathos-mcp"
+```
+
+- The agent's tools are `get_project`, `propose_commands` and `get_proposal`.
+  It reaches the window that is open; only one window at a time answers.
+- An agent only proposes. A proposal appears at the top right with its summary
+  and what it changes. `Enter` or `Apply` applies it, and `Escape` or
+  `Dismiss` dismisses it. Undo takes its commands back one at a time.
+- A proposal with a rejected command is refused, and the agent is told which.
+  A proposal goes stale when the project changes before it is applied.
+- The window listens on `$XDG_RUNTIME_DIR/pathos/agent.sock`, or on
+  `$PATHOS_SOCKET` when it is set, for the window and `pathos-mcp` alike.
