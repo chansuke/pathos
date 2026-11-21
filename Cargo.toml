@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 gpui = "0.2.2"
+pathos-agent = { path = "crates/pathos-agent", version = "0.1.0" }
 pathos-core = { path = "crates/pathos-core", version = "0.1.0" }
 pathos-playback = { path = "crates/pathos-playback", version = "0.1.0" }
 pathos-render = { path = "crates/pathos-render", version = "0.1.0" }
