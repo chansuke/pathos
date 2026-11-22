@@ -1,3 +1,4 @@
+mod agent;
 mod editor;
 mod file;
 mod layout;
@@ -15,6 +16,7 @@ use gpui::{
     ScrollWheelEvent, Task, TitlebarOptions, Window, WindowBounds, WindowOptions, div, prelude::*,
     px, rgb, rgba, size,
 };
+use pathos_agent::{Listener, Proposals};
 use pathos_core::{CENTER_PAN, Clip, Document, PPQ, Project, Tick, UNITY_VOLUME};
 use pathos_playback::output::Output;
 use pathos_render::Score;
@@ -108,6 +110,8 @@ struct Pathos {
     meter: Meter,
     /// When the meter last took the peaks of the audio thread.
     metered: Option<Instant>,
+    /// What agents proposed through the socket (ADR 35).
+    proposals: Proposals,
 }
 
 impl Pathos {
@@ -270,6 +274,54 @@ impl Pathos {
         }
         cx.notify();
         true
+    }
+
+    /// Applies the proposal the window shows (ADR 35).
+    fn apply_proposal(&mut self, cx: &mut Context<Self>) {
+        if self.editor.apply_proposal(&mut self.proposals) {
+            self.notice = None;
+            self.publish();
+        }
+        cx.notify();
+    }
+
+    fn dismiss_proposal(&mut self, cx: &mut Context<Self>) {
+        self.proposals.dismiss(self.editor.document());
+        cx.notify();
+    }
+
+    /// `Enter` applies the proposal the window shows and `Escape` dismisses
+    /// it.
+    fn handle_proposal(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        let modifiers = &event.keystroke.modifiers;
+        if modifiers.secondary() || self.proposals.shown(self.editor.document()).is_none() {
+            return false;
+        }
+        match event.keystroke.key.as_str() {
+            "enter" => self.apply_proposal(cx),
+            "escape" => self.dismiss_proposal(cx),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Answers the requests of agents on the socket until the window goes.
+    fn listen(mut listener: Listener, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            while let Some(call) = listener.next().await {
+                let answered = this.update(cx, |this, cx| {
+                    let response = this
+                        .proposals
+                        .handle(this.editor.document(), call.request.clone());
+                    call.reply(response);
+                    cx.notify();
+                });
+                if answered.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     /// Hands the project as it should sound now to the audio thread (ADR 18).
@@ -830,6 +882,12 @@ impl Render for Pathos {
             Err(_) => (0, 0, None),
         };
         let top_bar = self.top_bar(width, tick, frame, cx);
+        let pending = self.proposals.pending(self.editor.document());
+        let proposal = self
+            .proposals
+            .shown(self.editor.document())
+            .cloned()
+            .map(|proposal| agent::proposal_card(&proposal, pending, width, cx));
         let project = self.editor.history().present();
         let view = self.editor.view();
         let shown = layout::lanes_rect(&view, selected.is_some());
@@ -842,7 +900,10 @@ impl Render for Pathos {
             .text_xs()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                if this.handle_file(event, cx) || this.handle_transport(event, cx) {
+                if this.handle_proposal(event, cx)
+                    || this.handle_file(event, cx)
+                    || this.handle_transport(event, cx)
+                {
                     return;
                 }
                 let modifiers = &event.keystroke.modifiers;
@@ -925,6 +986,7 @@ impl Render for Pathos {
                     })),
             ))
             .children(selected.map(|id| piano_roll(project, id, width, height)))
+            .children(proposal)
             .child(footer(status, width, height))
     }
 }
@@ -1388,7 +1450,15 @@ fn main() {
                         metronome: false,
                         meter: Meter::default(),
                         metered: None,
+                        proposals: Proposals::default(),
                     };
+                    let socket = pathos_agent::socket_path();
+                    match Listener::bind(&socket) {
+                        Ok(listener) => Pathos::listen(listener, cx),
+                        Err(error) => {
+                            eprintln!("agents cannot connect at {}: {error}", socket.display())
+                        }
+                    }
                     // A file named on the command line is opened, or created
                     // by the first save if it does not exist yet.
                     if let Some(path) = std::env::args_os().nth(1).map(PathBuf::from) {

@@ -22,7 +22,8 @@ development.
 
 Use `Cmd` instead of `Ctrl` on macOS. Drag clips to move them, click in the
 piano roll to add or remove notes, and drag a track's volume and pan to change
-them. `cargo run -- song.pathos` opens or creates `song.pathos`. See
+them. `cargo run -- song.pathos` opens or creates `song.pathos`. An agent can read
+the open project and propose edits through the MCP server `pathos-mcp`. See
 [docs/usage.md](docs/usage.md) for every control.
 
 ## Build

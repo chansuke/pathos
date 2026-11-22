@@ -32,3 +32,4 @@
 * [32. Round a tick to the nearest sample](0032-round-a-tick-to-the-nearest-sample.md)
 * [33. Compare with REAPER through a converted project and a JSFX copy of the instrument](0033-compare-with-reaper-through-a-converted-project-and-a-jsfx-copy-of-the-instrument.md)
 * [34. Run the comparison with REAPER locally, not in CI](0034-run-the-comparison-with-reaper-locally-not-in-ci.md)
+* [35. Connect agents to the running app through a local socket and an MCP server, as proposals the user accepts](0035-connect-agents-to-the-running-app-through-a-local-socket-and-an-mcp-server-as-proposals-the-user-accepts.md)

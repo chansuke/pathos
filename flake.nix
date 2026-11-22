@@ -65,6 +65,14 @@
             version = "0.1.0";
             src = self;
             cargoLock.lockFile = ./Cargo.lock;
+            # The window, and the MCP server through which agents reach it
+            # (ADR 35).
+            cargoBuildFlags = [
+              "-p"
+              "pathos"
+              "-p"
+              "pathos-agent"
+            ];
 
             nativeBuildInputs = [
               pkgs.pkg-config
