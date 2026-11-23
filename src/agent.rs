@@ -1,7 +1,9 @@
-//! The proposals of agents in the window (ADR 35).
+//! The proposals of agents and the findings of reviews in the window (ADR 35,
+//! ADR 36).
 
 use gpui::{Context, Div, FontWeight, MouseButton, MouseDownEvent, div, prelude::*, px, rgb, rgba};
-use pathos_agent::Proposal;
+use pathos_agent::{Anchor, Proposal};
+use pathos_core::PPQ;
 
 use crate::layout::TIMELINE_TOP;
 use crate::{
@@ -14,9 +16,27 @@ const CARD_WIDTH: f32 = 400.0;
 /// The most changes a proposal shows; the rest are counted.
 const SHOWN_CHANGES: usize = 8;
 
-/// The oldest pending proposal at the top right of the lanes, with the
-/// changes it makes, the number of proposals and the keys that apply or
-/// dismiss it.
+/// The ticks of a bar, as the ruler counts them.
+const BAR: u64 = 4 * PPQ;
+
+/// Where a finding is, as the window names tracks and bars.
+pub fn anchor_label(anchor: &Anchor) -> String {
+    let place = match anchor.track {
+        Some(track) => format!("Track {}", track + 1),
+        None => "Master".into(),
+    };
+    let (first, last) = (anchor.start / BAR + 1, (anchor.end - 1) / BAR + 1);
+    if first == last {
+        format!("{place}, bar {first}")
+    } else {
+        format!("{place}, bars {first} to {last}")
+    }
+}
+
+/// The oldest pending proposal at the top right of the lanes, with where it
+/// points if it is a finding, the changes it makes, the number of proposals
+/// and the keys that apply or dismiss it. A finding without commands can only
+/// be dismissed.
 pub fn proposal_card(
     proposal: &Proposal,
     pending: usize,
@@ -30,7 +50,11 @@ pub fn proposal_card(
         .justify_between()
         .text_size(px(10.0))
         .text_color(rgb(SUBTLE_TEXT))
-        .child("AGENT PROPOSAL")
+        .child(if proposal.anchor.is_some() {
+            "REVIEW FINDING"
+        } else {
+            "AGENT PROPOSAL"
+        })
         .children((pending > 1).then(|| format!("1 OF {pending}")));
     let summary = (!proposal.summary.is_empty()).then(|| {
         div()
@@ -38,24 +62,32 @@ pub fn proposal_card(
             .font_weight(FontWeight::MEDIUM)
             .child(proposal.summary.clone())
     });
-    let changes = div()
-        .flex()
-        .flex_col()
-        .gap_0p5()
-        .p_2()
-        .rounded(px(4.0))
-        .bg(rgb(BACKGROUND))
-        .font_family(MONO)
-        .text_size(px(11.0))
-        .text_color(rgb(SOFT_TEXT))
-        .children(
-            proposal
-                .changes
-                .iter()
-                .take(SHOWN_CHANGES)
-                .map(|change| div().child(change.clone())),
-        )
-        .children((more > 0).then(|| div().child(format!("and {more} more"))));
+    let anchor = proposal.anchor.map(|anchor| {
+        div()
+            .text_size(px(11.0))
+            .text_color(rgb(SOFT_TEXT))
+            .child(anchor_label(&anchor))
+    });
+    let changes = (!proposal.changes.is_empty()).then(|| {
+        div()
+            .flex()
+            .flex_col()
+            .gap_0p5()
+            .p_2()
+            .rounded(px(4.0))
+            .bg(rgb(BACKGROUND))
+            .font_family(MONO)
+            .text_size(px(11.0))
+            .text_color(rgb(SOFT_TEXT))
+            .children(
+                proposal
+                    .changes
+                    .iter()
+                    .take(SHOWN_CHANGES)
+                    .map(|change| div().child(change.clone())),
+            )
+            .children((more > 0).then(|| div().child(format!("and {more} more"))))
+    });
     let button = |label: &'static str, key: &'static str, primary: bool| {
         let button = div()
             .flex()
@@ -90,13 +122,15 @@ pub fn proposal_card(
                 this.dismiss_proposal(cx);
             }),
         ))
-        .child(button("Apply", "Enter", true).on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                cx.stop_propagation();
-                this.apply_proposal(cx);
-            }),
-        ));
+        .children((!proposal.commands.is_empty()).then(|| {
+            button("Apply", "Enter", true).on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.apply_proposal(cx);
+                }),
+            )
+        }));
     div()
         .absolute()
         .top(px(TIMELINE_TOP + 12.0))
@@ -112,12 +146,28 @@ pub fn proposal_card(
         .bg(rgb(PANEL))
         .shadow_lg()
         .child(header)
+        .children(anchor)
         .children(summary)
-        .child(changes)
+        .children(changes)
         .child(buttons)
         // A click on the card is not a click on the lanes under it.
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_anchor_is_named_by_its_track_and_bars() {
+        let anchor = |track, start, end| Anchor { track, start, end };
+        assert_eq!(anchor_label(&anchor(Some(0), 0, BAR)), "Track 1, bar 1");
+        assert_eq!(
+            anchor_label(&anchor(None, BAR + PPQ, 3 * BAR + 1)),
+            "Master, bars 2 to 4"
+        );
+    }
 }
