@@ -251,6 +251,7 @@ mod tests {
             &Request::Propose {
                 summary: "a track".into(),
                 commands: vec!["add-track".into()],
+                anchor: None,
             },
         )
         .unwrap();

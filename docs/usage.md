@@ -67,8 +67,16 @@ nix build
 claude mcp add pathos -- "$PWD/result/bin/pathos-mcp"
 ```
 
-- The agent's tools are `get_project`, `propose_commands` and `get_proposal`.
-  It reaches the window that is open; only one window at a time answers.
+- The agent's tools are `get_project`, `propose_commands`,
+  `get_measurements`, `report_finding` and `get_proposal`. It reaches the
+  window that is open; only one window at a time answers.
+- To review a mix, ask the agent to. `get_measurements` renders the project
+  and measures each track alone and the master: loudness in LUFS, true peak,
+  octave bands and phase correlation, for the whole song and bar by bar. No
+  audio leaves the machine; the agent gets the numbers only.
+- A finding of a review points at a track, or the master, and a range of
+  bars, which the lanes mark. It may come with commands that address it; one
+  without commands can only be dismissed.
 - An agent only proposes. A proposal appears at the top right with its summary
   and what it changes. `Enter` or `Apply` applies it, and `Escape` or
   `Dismiss` dismisses it. Undo takes its commands back one at a time.

@@ -5,7 +5,9 @@ use std::io::{self, BufRead, Write};
 
 use serde_json::{Value, json};
 
-use crate::protocol::{Request, Response};
+use pathos_core::Document;
+
+use crate::protocol::{Anchor, Request, Response};
 
 /// The versions of the protocol this server speaks, the latest last.
 const VERSIONS: [&str; 3] = ["2024-11-05", "2025-03-26", "2025-06-18"];
@@ -58,6 +60,56 @@ fn tools() -> Value {
                     }
                 },
                 "required": ["summary", "commands"]
+            }
+        },
+        {
+            "name": "get_measurements",
+            "description": "Render the project open in pathos at 48 kHz and \
+                measure it for a review, per track and on the master: the \
+                integrated loudness of ITU-R BS.1770 in LUFS, the true peak in \
+                dBTP, the phase correlation of the two channels, the level of \
+                each octave band in dBFS, and the loudness, true peak and \
+                correlation of each bar (four beats). Each track is measured \
+                alone, soloed and unmuted, at its volume and pan; the master as \
+                it is heard. Levels are absent for silence. No audio is given, \
+                so a review from these numbers cannot judge sound beyond them; \
+                say so in findings that depend on it. Songs over ten minutes \
+                are refused.",
+            "inputSchema": {"type": "object", "properties": {}},
+            "annotations": {"readOnlyHint": true}
+        },
+        {
+            "name": "report_finding",
+            "description": format!(
+                "Report a finding of a review of the project open in pathos, \
+                anchored to a track, or to the master when track is left out, \
+                and to a range of ticks. The window shows it with its range \
+                marked; commands that would address it are optional and are \
+                checked like those of propose_commands, and the user applies or \
+                dismisses them. A finding without commands can only be \
+                dismissed. Returns the id, which get_proposal accepts. {COMMANDS}"
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "description": "The problem, what it was measured from, and the fix."
+                    },
+                    "track": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "The track, counted from 0; leave it out for the master."
+                    },
+                    "start": {"type": "integer", "minimum": 0, "description": "The first tick."},
+                    "end": {"type": "integer", "minimum": 1, "description": "The tick after the last."},
+                    "commands": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Commands that address the finding, applied in order."
+                    }
+                },
+                "required": ["summary", "start", "end"]
             }
         },
         {
@@ -120,7 +172,9 @@ fn answer(line: &str, call: &mut impl FnMut(&Request) -> io::Result<Response>) -
                     "serverInfo": {"name": "pathos", "version": env!("CARGO_PKG_VERSION")},
                     "instructions": "pathos is a DAW. Read the open project with \
                         get_project before proposing commands, and propose changes \
-                        with propose_commands; the user applies them in the window."
+                        with propose_commands; the user applies them in the window. \
+                        To review a mix, read get_measurements and report each \
+                        problem with report_finding."
                 }),
             )
         }
@@ -128,14 +182,24 @@ fn answer(line: &str, call: &mut impl FnMut(&Request) -> io::Result<Response>) -
         "tools/list" => success(id, json!({"tools": tools()})),
         "tools/call" => match tool_request(&params) {
             Err(message) => failure(id, -32602, &message),
-            Ok(request) => success(id, tool_result(call(&request))),
+            Ok(Tool::Relay(request)) => success(id, tool_result(call(&request))),
+            Ok(Tool::Measure) => success(id, measurements(call(&Request::File))),
         },
         _ => failure(id, -32601, &format!("no method {method}")),
     })
 }
 
-/// The request a tool call makes.
-fn tool_request(params: &Value) -> Result<Request, String> {
+/// What a tool call does.
+enum Tool {
+    /// Sends the request to the window and gives its response.
+    Relay(Request),
+    /// Reads the project file from the window and measures it here, so that
+    /// the window does not render (ADR 36).
+    Measure,
+}
+
+/// The tool a call names, with its arguments.
+fn tool_request(params: &Value) -> Result<Tool, String> {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
     let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
     let argument = |key: &str| {
@@ -143,30 +207,81 @@ fn tool_request(params: &Value) -> Result<Request, String> {
             .get(key)
             .ok_or_else(|| format!("{name} needs {key}"))
     };
-    match name {
-        "get_project" => Ok(Request::Project),
-        "propose_commands" => {
-            let summary = argument("summary")?
+    let summary = || {
+        Ok::<_, String>(
+            argument("summary")?
                 .as_str()
                 .ok_or("summary must be a string")?
-                .to_string();
-            let commands = argument("commands")?
-                .as_array()
-                .and_then(|commands| {
-                    commands
-                        .iter()
-                        .map(|command| command.as_str().map(str::to_string))
-                        .collect::<Option<Vec<_>>>()
-                })
-                .ok_or("commands must be a list of strings")?;
-            Ok(Request::Propose { summary, commands })
-        }
-        "get_proposal" => Ok(Request::Proposal {
+                .to_string(),
+        )
+    };
+    let commands = |value: &Value| {
+        value
+            .as_array()
+            .and_then(|commands| {
+                commands
+                    .iter()
+                    .map(|command| command.as_str().map(str::to_string))
+                    .collect::<Option<Vec<_>>>()
+            })
+            .ok_or("commands must be a list of strings".to_string())
+    };
+    let tick = |key: &str| {
+        argument(key)?
+            .as_u64()
+            .ok_or(format!("{key} must be a whole number"))
+    };
+    let request = match name {
+        "get_project" => Request::Project,
+        "get_measurements" => return Ok(Tool::Measure),
+        "propose_commands" => Request::Propose {
+            summary: summary()?,
+            commands: commands(argument("commands")?)?,
+            anchor: None,
+        },
+        "report_finding" => Request::Propose {
+            summary: summary()?,
+            commands: match arguments.get("commands") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(value) => commands(value)?,
+            },
+            anchor: Some(Anchor {
+                track: match arguments.get("track") {
+                    None | Some(Value::Null) => None,
+                    Some(track) => Some(track.as_u64().ok_or("track must be a whole number")?),
+                },
+                start: tick("start")?,
+                end: tick("end")?,
+            }),
+        },
+        "get_proposal" => Request::Proposal {
             id: argument("id")?
                 .as_u64()
                 .ok_or("id must be a whole number")?,
-        }),
-        _ => Err(format!("no tool {name:?}")),
+        },
+        _ => return Err(format!("no tool {name:?}")),
+    };
+    Ok(Tool::Relay(request))
+}
+
+/// The result of `get_measurements` from the window's response to a request
+/// for its project file.
+fn measurements(response: io::Result<Response>) -> Value {
+    let text = match response {
+        Ok(Response::File { text }) => text,
+        Ok(Response::Error { .. }) | Err(_) => return tool_result(response),
+        Ok(_) => return tool_result(Ok(Response::error("the window did not send its file"))),
+    };
+    let measured = Document::load(&text)
+        .map_err(|error| format!("the project file does not load: {error}"))
+        .and_then(|document| {
+            pathos_measure::measure(document.history().present()).map_err(|error| error.to_string())
+        })
+        // Compact, since a song has many bars and the agent reads it whole.
+        .map(|report| serde_json::to_string(&report).unwrap_or_default());
+    match measured {
+        Ok(text) => json!({"content": [{"type": "text", "text": text}], "isError": false}),
+        Err(text) => json!({"content": [{"type": "text", "text": text}], "isError": true}),
     }
 }
 
@@ -248,7 +363,16 @@ mod tests {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect();
-        assert_eq!(names, ["get_project", "propose_commands", "get_proposal"]);
+        assert_eq!(
+            names,
+            [
+                "get_project",
+                "propose_commands",
+                "get_measurements",
+                "report_finding",
+                "get_proposal"
+            ]
+        );
         assert_eq!(
             replies[2],
             json!({"jsonrpc": "2.0", "id": "three", "result": {}})
@@ -285,7 +409,8 @@ mod tests {
             [
                 Request::Propose {
                     summary: "a track".into(),
-                    commands: vec!["add-track".into()]
+                    commands: vec!["add-track".into()],
+                    anchor: None,
                 },
                 Request::Proposal { id: 0 },
                 Request::Proposal { id: 7 },
@@ -303,6 +428,95 @@ mod tests {
         assert!(text(&replies[1]).contains("\"pending\""));
         assert_eq!(text(&replies[2]), "no proposal 7");
         assert_eq!(replies[2]["result"]["isError"], true);
+    }
+
+    #[test]
+    fn measurements_are_taken_from_the_project_file_here() {
+        let call = |name: &str| {
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                   "params": {"name": name, "arguments": {}}})
+        };
+        let (replies, requests) = exchange(&[call("get_measurements")], |_| {
+            Ok(Response::File {
+                text: "add-track\nadd-clip 0 0 3840\nadd-note 0 0 3840 69 100\n".into(),
+            })
+        });
+        assert_eq!(requests, [Request::File]);
+        assert_eq!(replies[0]["result"]["isError"], false);
+        let report: pathos_measure::Report =
+            serde_json::from_str(replies[0]["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(report.seconds, 2.0);
+        assert_eq!(report.tracks.len(), 1);
+        assert!(report.master.loudness.is_some());
+
+        let text = |reply: &Value| {
+            reply["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        let (replies, _) = exchange(&[call("get_measurements")], |_| {
+            Ok(Response::File {
+                text: "delete-clip 0\n".into(),
+            })
+        });
+        assert_eq!(
+            text(&replies[0]),
+            "the project file does not load: line 1: no such clip"
+        );
+        let (replies, _) = exchange(&[call("get_measurements")], |_| {
+            Err(io::Error::from(io::ErrorKind::NotFound))
+        });
+        assert!(text(&replies[0]).starts_with("pathos cannot be reached"));
+        assert_eq!(replies[0]["result"]["isError"], true);
+    }
+
+    #[test]
+    fn a_finding_is_a_proposal_with_an_anchor() {
+        let (replies, requests) = exchange(
+            &[
+                json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                       "params": {"name": "report_finding",
+                                  "arguments": {"summary": "clips", "track": 1,
+                                                "start": 0, "end": 3840,
+                                                "commands": ["set-track-volume 1 500"]}}}),
+                json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                       "params": {"name": "report_finding",
+                                  "arguments": {"summary": "narrow", "start": 960, "end": 1920}}}),
+                json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                       "params": {"name": "report_finding",
+                                  "arguments": {"summary": "x", "start": -1, "end": 1}}}),
+            ],
+            |_| Ok(Response::Proposed { id: 0 }),
+        );
+        assert_eq!(
+            requests,
+            [
+                Request::Propose {
+                    summary: "clips".into(),
+                    commands: vec!["set-track-volume 1 500".into()],
+                    anchor: Some(Anchor {
+                        track: Some(1),
+                        start: 0,
+                        end: 3840
+                    }),
+                },
+                Request::Propose {
+                    summary: "narrow".into(),
+                    commands: vec![],
+                    anchor: Some(Anchor {
+                        track: None,
+                        start: 960,
+                        end: 1920
+                    }),
+                },
+            ]
+        );
+        assert_eq!(
+            replies[2]["error"]["message"],
+            "start must be a whole number"
+        );
     }
 
     #[test]

@@ -3,10 +3,10 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 
-use pathos_core::{Command, Document, Edit, EditError, History};
+use pathos_core::{Command, Document, Edit, EditError, History, MAX_TICK};
 
 use crate::difference::difference;
-use crate::protocol::{ProjectState, Request, Response, Status};
+use crate::protocol::{Anchor, ProjectState, Request, Response, Status};
 
 /// The most commands one proposal may hold.
 pub const MAX_COMMANDS: usize = 1000;
@@ -20,6 +20,8 @@ pub struct Proposal {
     pub commands: Vec<Command>,
     /// What the commands change, as [`difference`] tells it.
     pub changes: Vec<String>,
+    /// Where a finding of a review is (ADR 36); a proposal has none.
+    pub anchor: Option<Anchor>,
     /// The number of edits of the document it was made against.
     base: usize,
 }
@@ -28,6 +30,10 @@ pub struct Proposal {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProposalError {
     Empty,
+    /// The anchor of a finding names no track or no range.
+    UnknownTrack(u64),
+    EmptyRange,
+    RangeBeyondLastTick,
     TooLong,
     /// Not a command of the trace format. Undo and redo are not commands.
     Unrecognized {
@@ -45,6 +51,13 @@ impl fmt::Display for ProposalError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ProposalError::Empty => f.write_str("a proposal needs at least one command"),
+            ProposalError::UnknownTrack(track) => {
+                write!(f, "the anchor names track {track}, which does not exist")
+            }
+            ProposalError::EmptyRange => f.write_str("the anchor must end after it starts"),
+            ProposalError::RangeBeyondLastTick => {
+                write!(f, "the anchor must end by tick {MAX_TICK}")
+            }
             ProposalError::TooLong => {
                 write!(f, "a proposal may hold at most {MAX_COMMANDS} commands")
             }
@@ -74,12 +87,17 @@ impl Proposals {
         self.refresh(document);
         match request {
             Request::Project => Response::Project(ProjectState::of(document)),
-            Request::Propose { summary, commands } => {
-                match self.propose(document, summary, &commands) {
-                    Ok(id) => Response::Proposed { id },
-                    Err(error) => Response::error(error),
-                }
-            }
+            Request::File => Response::File {
+                text: document.save(),
+            },
+            Request::Propose {
+                summary,
+                commands,
+                anchor,
+            } => match self.submit(document, summary, &commands, anchor) {
+                Ok(id) => Response::Proposed { id },
+                Err(error) => Response::error(error),
+            },
             Request::Proposal { id } => match self.status(id) {
                 Some(status) => Response::Proposal { id, status },
                 None => Response::error(format!("no proposal {id}")),
@@ -95,7 +113,40 @@ impl Proposals {
         summary: String,
         lines: &[String],
     ) -> Result<u64, ProposalError> {
-        if lines.is_empty() {
+        self.submit(document, summary, lines, None)
+    }
+
+    /// Checks a finding of a review against `document`: its anchor, and its
+    /// commands as for a proposal, of which it may have none (ADR 36).
+    pub fn report(
+        &mut self,
+        document: &Document,
+        summary: String,
+        lines: &[String],
+        anchor: Anchor,
+    ) -> Result<u64, ProposalError> {
+        self.submit(document, summary, lines, Some(anchor))
+    }
+
+    fn submit(
+        &mut self,
+        document: &Document,
+        summary: String,
+        lines: &[String],
+        anchor: Option<Anchor>,
+    ) -> Result<u64, ProposalError> {
+        if let Some(anchor) = anchor {
+            let project = document.history().present();
+            if let Some(track) = anchor.track.filter(|&track| track >= project.track_count()) {
+                return Err(ProposalError::UnknownTrack(track));
+            }
+            if anchor.end <= anchor.start {
+                return Err(ProposalError::EmptyRange);
+            }
+            if anchor.end > MAX_TICK {
+                return Err(ProposalError::RangeBeyondLastTick);
+            }
+        } else if lines.is_empty() {
             return Err(ProposalError::Empty);
         }
         if lines.len() > MAX_COMMANDS {
@@ -127,6 +178,7 @@ impl Proposals {
             summary,
             commands,
             changes: difference(document.history().present(), history.present()),
+            anchor,
             base: document.edits().len(),
         });
         Ok(id)
@@ -153,9 +205,17 @@ impl Proposals {
         self.pending.len()
     }
 
-    /// Applies the shown proposal to `document`.
+    /// Applies the shown proposal to `document`. A finding without commands
+    /// has nothing to apply and stays until it is dismissed.
     pub fn apply(&mut self, document: &mut Document) -> Result<(), EditError> {
         self.refresh(document);
+        if self
+            .pending
+            .front()
+            .is_none_or(|proposal| proposal.commands.is_empty())
+        {
+            return Ok(());
+        }
         let Some(proposal) = self.pending.pop_front() else {
             return Ok(());
         };
@@ -297,6 +357,67 @@ mod tests {
     }
 
     #[test]
+    fn a_finding_is_anchored_and_may_have_no_commands() {
+        let mut document = document(&["add-track", "add-clip 0 0 3840"]);
+        let mut proposals = Proposals::default();
+        let anchor = |track, start, end| Anchor { track, start, end };
+        let id = proposals
+            .report(&document, "too loud".into(), &[], anchor(Some(0), 0, 3840))
+            .unwrap();
+        let shown = proposals.shown(&document).unwrap();
+        assert_eq!(shown.anchor, Some(anchor(Some(0), 0, 3840)));
+        assert!(shown.changes.is_empty());
+        // Nothing to apply: it stays until it is dismissed.
+        proposals.apply(&mut document).unwrap();
+        assert_eq!(proposals.status(id), Some(Status::Pending));
+        assert_eq!(document.edits().len(), 2);
+        proposals.dismiss(&document);
+        assert_eq!(proposals.status(id), Some(Status::Dismissed));
+
+        let fix = proposals
+            .report(
+                &document,
+                "turn it down".into(),
+                &lines(&["set-track-volume 0 500"]),
+                anchor(None, 0, 3840),
+            )
+            .unwrap();
+        proposals.apply(&mut document).unwrap();
+        assert_eq!(proposals.status(fix), Some(Status::Applied));
+        assert_eq!(document.history().present().track(0).unwrap().volume, 500);
+
+        let mut refuse = |anchor| {
+            proposals
+                .report(&document, String::new(), &[], anchor)
+                .unwrap_err()
+                .to_string()
+        };
+        assert_eq!(
+            refuse(anchor(Some(1), 0, 960)),
+            "the anchor names track 1, which does not exist"
+        );
+        assert_eq!(
+            refuse(anchor(None, 960, 960)),
+            "the anchor must end after it starts"
+        );
+        assert_eq!(
+            refuse(anchor(None, 0, MAX_TICK + 1)),
+            format!("the anchor must end by tick {MAX_TICK}")
+        );
+    }
+
+    #[test]
+    fn the_file_request_gives_the_edits_of_the_project() {
+        let document = document(&["add-track", "add-clip 0 0 960", "undo"]);
+        assert_eq!(
+            Proposals::default().handle(&document, Request::File),
+            Response::File {
+                text: "add-track\nadd-clip 0 0 960\nundo\n".into()
+            }
+        );
+    }
+
+    #[test]
     fn a_dismissed_proposal_is_not_applied() {
         let mut document = document(&[]);
         let mut proposals = Proposals::default();
@@ -322,7 +443,8 @@ mod tests {
                 &document,
                 Request::Propose {
                     summary: String::new(),
-                    commands: lines(&["add-track"])
+                    commands: lines(&["add-track"]),
+                    anchor: None,
                 }
             ),
             Response::Proposed { id: 0 }
@@ -343,7 +465,8 @@ mod tests {
                 &document,
                 Request::Propose {
                     summary: String::new(),
-                    commands: lines(&["redo"])
+                    commands: lines(&["redo"]),
+                    anchor: None,
                 }
             ),
             Response::error("command 1 (\"redo\") is not a command")

@@ -64,6 +64,8 @@ const ACCENT: u32 = 0x5aa9ff;
 const LOOP: u32 = ACCENT << 8 | 0x12;
 /// The ground of a readout, darker than the bar around it.
 const READOUT: u32 = 0x0f1113;
+/// The range a finding of a review points at (ADR 36).
+const FINDING: u32 = 0xe2b54a;
 /// The meter's zones: up to -6 dB, up to full scale, and past it.
 const METER_LOW: u32 = 0x57b97a;
 const METER_HIGH: u32 = 0xe2b54a;
@@ -299,6 +301,8 @@ impl Pathos {
         }
         match event.keystroke.key.as_str() {
             "enter" => self.apply_proposal(cx),
+            // A finding without commands is only dismissed; apply_proposal
+            // leaves it as it is.
             "escape" => self.dismiss_proposal(cx),
             _ => return false,
         }
@@ -883,11 +887,9 @@ impl Render for Pathos {
         };
         let top_bar = self.top_bar(width, tick, frame, cx);
         let pending = self.proposals.pending(self.editor.document());
-        let proposal = self
-            .proposals
-            .shown(self.editor.document())
-            .cloned()
-            .map(|proposal| agent::proposal_card(&proposal, pending, width, cx));
+        let shown = self.proposals.shown(self.editor.document()).cloned();
+        let anchor = shown.as_ref().and_then(|proposal| proposal.anchor);
+        let proposal = shown.map(|proposal| agent::proposal_card(&proposal, pending, width, cx));
         let project = self.editor.history().present();
         let view = self.editor.view();
         let shown = layout::lanes_rect(&view, selected.is_some());
@@ -975,6 +977,16 @@ impl Render for Pathos {
                             .as_ref()
                             .map(|ticks| at(layout::loop_rect(project, ticks)).bg(rgba(LOOP))),
                     )
+                    .chain(anchor.map(|anchor| {
+                        at(layout::anchor_rect(
+                            project,
+                            anchor.track,
+                            &(anchor.start..anchor.end),
+                        ))
+                        .bg(rgba(FINDING << 8 | 0x1f))
+                        .border_1()
+                        .border_color(rgba(FINDING << 8 | 0xb3))
+                    }))
                     .chain(playhead.map(|x| {
                         at(Rect {
                             x,

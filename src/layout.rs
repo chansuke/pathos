@@ -279,6 +279,20 @@ pub fn loop_rect(project: &Project, ticks: &Range<Tick>) -> Rect {
     }
 }
 
+/// The part of the timeline that a finding of a review points at (ADR 36):
+/// the lane of its track over its ticks, or every lane for the master.
+pub fn anchor_rect(project: &Project, track: Option<u64>, ticks: &Range<Tick>) -> Rect {
+    let lanes = loop_rect(project, ticks);
+    match track {
+        Some(track) => Rect {
+            y: lane_top(track),
+            height: LANE_HEIGHT,
+            ..lanes
+        },
+        None => lanes,
+    }
+}
+
 pub fn clip_rect(clip: &Clip) -> Rect {
     Rect {
         x: HEADER_WIDTH + ticks_to_width(clip.start, BEAT_WIDTH),
@@ -687,6 +701,25 @@ mod tests {
         assert_eq!(hold_rect(width, 1, 0.001).unwrap().x, meter.x);
         let full = hold_rect(width, 1, 1.0).unwrap();
         assert_eq!(full.x + full.width, meter.x + meter.width);
+    }
+
+    #[test]
+    fn a_finding_marks_its_track_or_every_lane() {
+        let project = project();
+        let ticks = 6 * PPQ..10 * PPQ;
+        let clip = clip_rect(&project.clips()[1]);
+        assert_eq!(
+            anchor_rect(&project, None, &ticks),
+            loop_rect(&project, &ticks)
+        );
+        assert_eq!(
+            anchor_rect(&project, Some(1), &ticks),
+            Rect {
+                y: lane_top(1),
+                height: LANE_HEIGHT,
+                ..clip
+            }
+        );
     }
 
     #[test]
