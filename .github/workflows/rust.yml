@@ -34,6 +34,10 @@ jobs:
       # The socket, the proposals and the MCP server need no window (ADR 35).
       - name: Test the agent interface
         run: nix develop -c cargo test -p pathos-agent
+      # The measurements for a review render with the deterministic render,
+      # whose own tests run on every platform below (ADR 36).
+      - name: Test the measurements
+        run: nix develop -c cargo test -p pathos-measure
       # The comparison with REAPER itself runs locally, not here (ADR 34);
       # the conversion needs no REAPER.
       - name: Test the conversion to REAPER projects

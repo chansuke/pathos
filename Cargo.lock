@@ -4045,6 +4045,7 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "pathos-core",
+ "pathos-measure",
  "serde",
  "serde_json",
 ]
@@ -4054,6 +4055,15 @@ name = "pathos-core"
 version = "0.1.0"
 dependencies = [
  "proptest",
+]
+
+[[package]]
+name = "pathos-measure"
+version = "0.1.0"
+dependencies = [
+ "pathos-core",
+ "pathos-render",
+ "serde",
 ]
 
 [[package]]

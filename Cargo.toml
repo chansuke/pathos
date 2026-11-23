@@ -19,6 +19,7 @@ pathos-render = { path = "crates/pathos-render", version = "0.1.0" }
 members = [
     "crates/pathos-agent",
     "crates/pathos-core",
+    "crates/pathos-measure",
     "crates/pathos-playback",
     "crates/pathos-reaper",
     "crates/pathos-render",
