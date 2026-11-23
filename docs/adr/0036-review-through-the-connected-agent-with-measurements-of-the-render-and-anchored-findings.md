@@ -1,7 +1,7 @@
 ---
 number: 36
 title: Review through the connected agent with measurements of the render and anchored findings
-status: proposed
+status: accepted
 date: 2026-11-23
 ---
 
