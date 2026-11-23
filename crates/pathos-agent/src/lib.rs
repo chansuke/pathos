@@ -15,6 +15,6 @@ mod socket;
 pub use difference::difference;
 pub use proposal::{MAX_COMMANDS, Proposal, ProposalError, Proposals};
 pub use protocol::{
-    ClipState, NoteState, ProjectState, Request, Response, Status, TempoState, TrackState,
+    Anchor, ClipState, NoteState, ProjectState, Request, Response, Status, TempoState, TrackState,
 };
 pub use socket::{BindError, Call, Listener, MAX_REQUEST, request, socket_path};

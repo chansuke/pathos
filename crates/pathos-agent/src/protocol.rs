@@ -1,7 +1,7 @@
 //! The requests an agent sends on the socket and their responses, one JSON
 //! value per line (ADR 35).
 
-use pathos_core::{Document, PPQ};
+use pathos_core::{Document, PPQ, Tick};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -9,19 +9,36 @@ use serde::{Deserialize, Serialize};
 pub enum Request {
     /// The open project.
     Project,
-    /// Propose `commands`, each a line of a project file (ADR 19).
+    /// The project file of the open project (ADR 19), from which the
+    /// project can be rebuilt exactly, for instance to be measured (ADR 36).
+    File,
+    /// Propose `commands`, each a line of a project file (ADR 19). A finding
+    /// of a review has an anchor, and may have no commands (ADR 36).
     Propose {
         summary: String,
         commands: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        anchor: Option<Anchor>,
     },
     /// Whether the proposal `id` is still pending.
     Proposal { id: u64 },
+}
+
+/// Where in the project a finding is: a track, or the master when there is
+/// none, from tick `start` up to `end`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Anchor {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub track: Option<u64>,
+    pub start: Tick,
+    pub end: Tick,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "response", rename_all = "snake_case")]
 pub enum Response {
     Project(ProjectState),
+    File { text: String },
     Proposed { id: u64 },
     Proposal { id: u64, status: Status },
     Error { message: String },
@@ -167,7 +184,23 @@ mod tests {
             .unwrap(),
             Request::Propose {
                 summary: "a track".into(),
-                commands: vec!["add-track".into()]
+                commands: vec!["add-track".into()],
+                anchor: None,
+            }
+        );
+        assert_eq!(
+            serde_json::from_str::<Request>(
+                r#"{"request":"propose","summary":"","commands":[],"anchor":{"start":0,"end":960}}"#
+            )
+            .unwrap(),
+            Request::Propose {
+                summary: String::new(),
+                commands: vec![],
+                anchor: Some(Anchor {
+                    track: None,
+                    start: 0,
+                    end: 960
+                }),
             }
         );
         assert_eq!(
