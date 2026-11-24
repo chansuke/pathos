@@ -1,5 +1,9 @@
 # cargo-mutants (ADR 13).
 
+# Leave the files that .gitignore names out of the build directories. The
+# worktrees under `.wt` hold their own `target` directories and fill the disk.
+gitignore = true
+
 exclude_globs = [
     # Kani harnesses build only under `cfg(kani)`, so no test can catch a
     # mutant of them; the Kani workflow checks them instead.
