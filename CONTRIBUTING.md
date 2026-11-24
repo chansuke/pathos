@@ -10,13 +10,13 @@ Work inside `nix develop`; see [README.md](README.md) for each platform. Before
 opening a pull request, run:
 
 ```sh
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo deny check
-lake -d spec build
-(cd spec && lake env lean --run Audit.lean)
-cargo test -p pathos-core
+scripts/verify
 ```
+
+It checks the formatting, clippy, `cargo deny`, the Lean model and its audit,
+and the tests, and writes `target/verify/summary.md` with what to fix.
+[docs/verification.md](docs/verification.md) lists its other modes and what
+to check by hand for each kind of change.
 
 ## How pathos changes
 
