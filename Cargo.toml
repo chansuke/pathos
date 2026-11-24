@@ -15,6 +15,12 @@ pathos-core = { path = "crates/pathos-core", version = "0.1.0" }
 pathos-playback = { path = "crates/pathos-playback", version = "0.1.0" }
 pathos-render = { path = "crates/pathos-render", version = "0.1.0" }
 
+[dev-dependencies]
+# tests/architecture.rs reads the modules of the app and the crate graph.
+proc-macro2 = { version = "1", features = ["span-locations"] }
+serde_json = "1"
+syn = { version = "2", features = ["full", "visit"] }
+
 [lints]
 workspace = true
 
