@@ -15,4 +15,7 @@ exclude_re = [
     # starts there, whose click adds nothing to the block, so `<=` adds the
     # same clicks. Keep the loop the only `<` of the function.
     "replace < with <= in Score::add_clicks",
+    # Every caller of `lufs` keeps only loudness above a finite gate, so the
+    # minus infinity that `>=` gives for silence never leaves the function.
+    "replace > with >= in lufs",
 ]
