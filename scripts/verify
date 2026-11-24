@@ -6,8 +6,9 @@
 #                                        audit of theorems and definitions,
 #                                        the differential tests of the core,
 #                                        the loom tests and the ADR index
-#   scripts/verify quick [--base REV]    format, clippy, cargo deny and the
+#   scripts/verify quick [--base REV]    format, clippy, cargo deny, the
 #                                        tests of every crate but the core
+#                                        and the lines added since REV
 #   scripts/verify mutants [--base REV]  cargo mutants on the core lines
 #                                        changed since REV (ADR 13)
 #   scripts/verify tla                   TLC on each specification in tla/
@@ -144,6 +145,8 @@ quick() {
     cargo deny check
   step test "fix the code or the test the log names" \
     cargo test --locked --workspace --exclude pathos-core
+  step added-lines "do what the log says for each line; do not reword the line to slip past the check" \
+    scripts/check-escape-hatches.sh "$base"
 }
 
 check() {
