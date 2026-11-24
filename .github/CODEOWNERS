@@ -1,0 +1,3 @@
+# The Lean model is the specification of the core (ADR 3), and a change to
+# its definitions or theorem statements needs human review (ADR 12).
+/spec/ @chansuke

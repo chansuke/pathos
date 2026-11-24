@@ -461,7 +461,10 @@ apply_harness!(
 
 /// The harnesses of each command. A new command does not compile until it is
 /// given one here.
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "only the match matters: it fails to compile until each command has a harness"
+)]
 fn harnesses(command: Command) -> &'static [fn()] {
     match command {
         Command::AddTrack => &[add_track],

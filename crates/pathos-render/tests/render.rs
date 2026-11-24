@@ -3,6 +3,11 @@
 //! platform; the track volume and mute of ADR 20; and the stereo pan of
 //! ADR 21.
 
+#![expect(
+    clippy::unwrap_used,
+    reason = "helpers outside #[test] functions fail the test by panicking"
+)]
+
 use std::num::NonZeroU32;
 
 use pathos_core::{Command, Edit, Event, History, MAX_TICK, PPQ, Project};

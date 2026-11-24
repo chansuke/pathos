@@ -4,6 +4,7 @@ mod file;
 mod layout;
 mod meter;
 mod readout;
+mod theme;
 
 use std::borrow::Cow;
 use std::ops::Range;
@@ -29,49 +30,7 @@ use layout::{
     TOP_BAR_HEIGHT, WINDOW_HEIGHT, WINDOW_WIDTH,
 };
 use meter::Meter;
-
-const BACKGROUND: u32 = 0x131518;
-/// The ground of the track headers.
-const PANEL: u32 = 0x1a1d21;
-const LANE: u32 = 0x17191d;
-const BLACK_KEY_ROW: u32 = 0x16181b;
-const WHITE_KEY_ROW: u32 = 0x1d2024;
-const WHITE_KEY: u32 = 0xd4d8de;
-/// The line between two white keys; the one below a C or an F is darker.
-const WHITE_KEY_LINE: u32 = 0xc3c8cf;
-const BLACK_KEY: u32 = 0x23272c;
-const GRID: u32 = 0x2a2e34;
-/// The line of each beat, fainter than the line of a bar.
-const BEAT_LINE: u32 = 0x1e2125;
-const CONTROL: u32 = 0x202328;
-const CONTROL_BORDER: u32 = 0x343941;
-const TEXT: u32 = 0xe6e8eb;
-/// Labels and values that are read less often than names.
-const SUBTLE_TEXT: u32 = 0x8a919b;
-/// Text on controls that are off.
-const SOFT_TEXT: u32 = 0xc9ced6;
-const SELECTION: u32 = 0xf2f4f7;
-const ERROR: u32 = 0xe06c75;
-const PLAYHEAD: u32 = 0xf0f0f0;
-const MUTED: u32 = 0xffb066;
-const SOLOED: u32 = 0x67c587;
-/// The colors of the tracks in turn. A track's color follows its place, so it
-/// is not part of the project.
-const TRACK_COLORS: [u32; 6] = [0x5aa9ff, 0xb48cff, 0x4fd1c5, 0xf48fb1, 0xe2b54a, 0x67c587];
-/// The color of the play button, the loop and the toggles that are on.
-const ACCENT: u32 = 0x5aa9ff;
-/// The loop range over the lanes, translucent so that clips show through.
-const LOOP: u32 = ACCENT << 8 | 0x12;
-/// The ground of a readout, darker than the bar around it.
-const READOUT: u32 = 0x0f1113;
-/// The range a finding of a review points at (ADR 36).
-const FINDING: u32 = 0xe2b54a;
-/// The meter's zones: up to -6 dB, up to full scale, and past it.
-const METER_LOW: u32 = 0x57b97a;
-const METER_HIGH: u32 = 0xe2b54a;
-/// The bundled font of the numbers and the keys, whose digits keep one width
-/// (ADR 31).
-const MONO: &str = "JetBrains Mono";
+use theme::*;
 
 /// The keys the footer lists, with what each does. The loop's and the
 /// metronome's are on their buttons and the track's on the ruler.
@@ -556,21 +515,6 @@ fn caption(text: &'static str) -> Div {
         .child(text.to_uppercase())
 }
 
-/// A key as the footer and the toggles show it.
-fn key_cap(key: &'static str) -> Div {
-    div()
-        .px(px(5.0))
-        .rounded(px(4.0))
-        .border_1()
-        .border_b_2()
-        .border_color(rgb(CONTROL_BORDER))
-        .bg(rgb(CONTROL))
-        .font_family(MONO)
-        .text_size(px(11.0))
-        .text_color(rgb(SOFT_TEXT))
-        .child(key)
-}
-
 /// The position, the time and the tempo, each under its caption.
 fn readout_view(position: &str, time: &str, tempo: &str) -> Div {
     let cell = |name: &'static str, value: &str, weight: FontWeight, width: f32| {
@@ -667,7 +611,11 @@ fn meter_view(width: f32, meter: &Meter) -> Vec<Div> {
         // The held peak, in the color of its zone (ADR 30).
         if let Some(mark) = layout::hold_rect(width, channel, meter::fraction(hold)) {
             let held = mark.x - rect.x;
-            let (_, color) = zones.into_iter().find(|&(to, _)| held < to).unwrap();
+            // Past the last zone, which ends at infinity, is only a NaN.
+            let color = zones
+                .into_iter()
+                .find(|&(to, _)| held < to)
+                .map_or(ERROR, |(_, color)| color);
             elements.push(at(mark).bg(rgb(color)));
         }
     }
@@ -860,7 +808,7 @@ impl Render for Pathos {
             (None, None, Ok(_)) => None,
         };
         if let Ok(output) = &self.output {
-            let now = Instant::now();
+            let now = clock();
             let elapsed = self.metered.map_or(Duration::ZERO, |then| now - then);
             self.metered = Some(now);
             self.meter.update(output.transport().take_peaks(), elapsed);
@@ -1419,6 +1367,26 @@ fn key(event: &KeyDownEvent) -> Option<Key> {
     }
 }
 
+/// The time of a frame. Only the window reads the clock, and passes the
+/// elapsed time to the meter (clippy.toml).
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the window is where the clock is read"
+)]
+fn clock() -> Instant {
+    Instant::now()
+}
+
+/// Where the window answers agents. Only `main.rs` reads the environment
+/// (clippy.toml).
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the window reads the environment and passes it in"
+)]
+fn socket_path() -> PathBuf {
+    pathos_agent::socket_path(|name| std::env::var_os(name))
+}
+
 fn main() {
     Application::new().run(|cx: &mut App| {
         cx.text_system()
@@ -1428,7 +1396,7 @@ fn main() {
             ])
             .expect("gpui rejected the bundled JetBrains Mono");
         let bounds = Bounds::centered(None, size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)), cx);
-        cx.open_window(
+        let opened = cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
@@ -1464,7 +1432,7 @@ fn main() {
                         metered: None,
                         proposals: Proposals::default(),
                     };
-                    let socket = pathos_agent::socket_path();
+                    let socket = socket_path();
                     match Listener::bind(&socket) {
                         Ok(listener) => Pathos::listen(listener, cx),
                         Err(error) => {
@@ -1483,8 +1451,12 @@ fn main() {
                     pathos
                 })
             },
-        )
-        .unwrap();
+        );
+        if let Err(error) = opened {
+            eprintln!("pathos cannot open its window: {error}");
+            cx.quit();
+            return;
+        }
         cx.activate(true);
     });
 }

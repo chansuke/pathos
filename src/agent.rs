@@ -5,10 +5,10 @@ use gpui::{Context, Div, FontWeight, MouseButton, MouseDownEvent, div, prelude::
 use pathos_agent::{Anchor, Proposal};
 use pathos_core::PPQ;
 
+use crate::Pathos;
 use crate::layout::TIMELINE_TOP;
-use crate::{
-    ACCENT, BACKGROUND, CONTROL, CONTROL_BORDER, GRID, MONO, PANEL, Pathos, SOFT_TEXT, SUBTLE_TEXT,
-    key_cap,
+use crate::theme::{
+    ACCENT, BACKGROUND, CONTROL, CONTROL_BORDER, GRID, MONO, PANEL, SOFT_TEXT, SUBTLE_TEXT, key_cap,
 };
 
 /// The widest a proposal is shown.
