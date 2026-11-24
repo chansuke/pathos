@@ -4,6 +4,11 @@
 //! executable. Every reply must be equal, including errors. Build the model
 //! first with `lake -d spec build`, or point `PATHOS_MODEL` at the executable.
 
+#![expect(
+    clippy::unwrap_used,
+    reason = "helpers outside #[test] functions fail the test by panicking"
+)]
+
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::PathBuf;
@@ -211,6 +216,10 @@ fn core_replies(trace: &[Request]) -> Vec<String> {
         .collect()
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test reads where the model is from the environment"
+)]
 fn model_path() -> PathBuf {
     match std::env::var_os("PATHOS_MODEL") {
         Some(path) => path.into(),
@@ -493,6 +502,10 @@ fn request() -> impl Strategy<Value = Request> {
 
 /// The number of traces to try: `PROPTEST_CASES`, or enough by default to
 /// reach the rarer boundaries, such as a split exactly at a clip's start.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test reads the number of cases from the environment, as proptest does"
+)]
 fn cases() -> u32 {
     std::env::var("PROPTEST_CASES")
         .ok()

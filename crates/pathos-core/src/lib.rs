@@ -4,6 +4,11 @@
 //! The Lean model in `spec/` is the specification of this crate. The
 //! differential tests check that both give the same result for every command.
 
+#![deny(
+    clippy::as_conversions,
+    reason = "the model has no casts, so neither does the core: convert with From or TryFrom, which say what happens to a value out of range"
+)]
+
 mod file;
 mod history;
 mod project;

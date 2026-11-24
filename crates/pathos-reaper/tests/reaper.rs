@@ -5,6 +5,11 @@
 //! `.#reaper` with `cargo test -p pathos-reaper -- --ignored`. `PATHOS_REAPER`
 //! is the command that runs REAPER, split at spaces; it defaults to `reaper`.
 
+#![expect(
+    clippy::unwrap_used,
+    reason = "helpers outside #[test] functions fail the test by panicking"
+)]
+
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::process::Command as Process;
@@ -38,6 +43,10 @@ fn scratch_directory() -> PathBuf {
 static REAPER: Mutex<()> = Mutex::new(());
 
 /// The first `frames` frames of `project` at `rate`, rendered by REAPER.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test reads the command that runs REAPER from the environment"
+)]
 fn render_with_reaper(project: &Project, rate: u32, frames: u64, layer: Layer) -> Vec<Frame> {
     let directory = scratch_directory();
     // REAPER keeps its settings and finds the instruments in this resource
@@ -245,6 +254,10 @@ fn generated_project() -> impl Strategy<Value = Document> {
 
 /// Each case runs REAPER four times, so the default number of cases is small;
 /// `PROPTEST_CASES` sets it.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test reads the number of cases from the environment, as proptest does"
+)]
 fn config() -> ProptestConfig {
     let cases = std::env::var("PROPTEST_CASES")
         .ok()

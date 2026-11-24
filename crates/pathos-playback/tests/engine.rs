@@ -1,6 +1,10 @@
 //! The engine plays the offline render (ADR 15, ADR 18) and follows the
 //! transport.
 
+#![expect(
+    clippy::unwrap_used,
+    reason = "helpers outside #[test] functions fail the test by panicking"
+)]
 #![cfg(not(loom))]
 
 use std::num::NonZeroU32;
