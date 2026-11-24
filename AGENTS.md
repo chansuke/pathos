@@ -37,9 +37,10 @@ Commands:
   the scenarios and generated projects with REAPER (ADR 33), on Linux. CI does
   not run it (ADR 34): the pre-push hook in `.githooks`, which the dev shell
   enables, runs it before a push that changes `crates/pathos-core`,
-  `crates/pathos-render` or `crates/pathos-reaper`. Put the line
-  `REAPER comparison: passed` in the description of such a pull request, or
-  CI fails. Do not skip the hook or add the line without a passing run. When
+  `crates/pathos-render` or `crates/pathos-reaper`. Put the line it prints,
+  `REAPER comparison: passed <key>`, in the description of such a pull
+  request, or CI fails; the key (`scripts/reaper-key`) names the code that
+  was compared, so a line from an older push fails too. Do not skip the hook. When
   REAPER disagrees, the cause is
   pathos, the converter or the JSFX instrument; record a deliberate difference
   in an ADR, and do not loosen the layers to make a failure go away.

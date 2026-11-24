@@ -1,7 +1,8 @@
 name: REAPER
 
 # CI does not run the comparison with REAPER (ADR 34), so a pull request that
-# changes the core, the render or the converter states that it ran it.
+# changes the core, the render or the converter states that it ran it, with
+# the key of the code it compared (scripts/reaper-key).
 on:
   pull_request:
     types: [opened, edited, reopened, synchronize]
@@ -18,19 +19,11 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Test the key and the check of the line
+        run: scripts/test-reaper-line.sh
       - name: Check that the pull request states the comparison with REAPER
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
           BODY: ${{ github.event.pull_request.body }}
-        run: |
-          paths="crates/pathos-core crates/pathos-render crates/pathos-reaper"
-          # shellcheck disable=SC2086
-          if git diff --quiet "$BASE...$HEAD" -- $paths; then
-            echo "The pull request does not change $paths."
-          elif printf '%s\n' "$BODY" | tr -d '\r' | grep -qx 'REAPER comparison: passed'; then
-            echo "The pull request states that the comparison with REAPER passed."
-          else
-            echo "::error::This pull request changes $paths. Run 'nix develop .#reaper -c cargo test -p pathos-reaper -- --ignored' and add the line 'REAPER comparison: passed' to its description (ADR 34)."
-            exit 1
-          fi
+        run: scripts/check-reaper-line.sh "$BASE" "$HEAD"
