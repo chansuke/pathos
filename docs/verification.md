@@ -63,7 +63,9 @@ a lint or a CI step now catches the mistake on its own.
 
 - Paths: `crates/pathos-core/*`, `crates/pathos-render/*`, `crates/pathos-reaper/*`
 - Check: The pre-push hook runs the comparison (`scripts/verify reaper`)
-  before the push; put the line it prints in the pull request. When REAPER disagrees, find
+  before the push. Put the line it prints, `REAPER comparison: passed <key>`,
+  in the pull request. The key (`scripts/reaper-key`) names the code that was
+  compared, so a line from an older push fails CI. When REAPER disagrees, find
   whether pathos, the converter or the JSFX instrument is wrong, and record
   a deliberate difference in an ADR.
 - Basis: ADR 7, ADR 33, ADR 34.
