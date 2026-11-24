@@ -4037,6 +4037,9 @@ dependencies = [
  "pathos-core",
  "pathos-playback",
  "pathos-render",
+ "proc-macro2",
+ "serde_json",
+ "syn 2.0.119",
 ]
 
 [[package]]

@@ -34,16 +34,19 @@ fn count() {
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         count();
+        // SAFETY: the caller upholds the contract of `GlobalAlloc::alloc`.
         unsafe { System.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
         count();
+        // SAFETY: `pointer` came from this allocator, which is `System`'s.
         unsafe { System.dealloc(pointer, layout) }
     }
 
     unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
         count();
+        // SAFETY: `pointer` came from this allocator, which is `System`'s.
         unsafe { System.realloc(pointer, layout, size) }
     }
 }

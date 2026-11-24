@@ -15,3 +15,6 @@ pathos-render = { path = "../pathos-render", version = "0.1.0" }
 [dev-dependencies]
 proptest = "1"
 hound = "3"
+
+[lints]
+workspace = true

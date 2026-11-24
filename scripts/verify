@@ -1,0 +1,254 @@
+#!/usr/bin/env bash
+# One command to check a change. Prints one line per step, keeps each step's
+# log under target/verify/logs/, and writes target/verify/summary.md.
+#
+#   scripts/verify [--base REV]          quick, then the Lean model, the
+#                                        audit of theorems and definitions,
+#                                        the differential tests of the core,
+#                                        the loom tests and the ADR index
+#   scripts/verify quick [--base REV]    format, clippy, cargo deny, the
+#                                        tests of every crate but the core
+#                                        and the lines added since REV
+#   scripts/verify mutants [--base REV]  cargo mutants on the lines of the
+#                                        core, the agent interface and the
+#                                        editor changed since REV (ADR 13)
+#   scripts/verify tla                   TLC on each specification in tla/
+#                                        (ADR 17)
+#   scripts/verify kani [--harness NAME] the Kani harnesses of the core, or
+#                                        one (ADR 11); needs `cargo kani`
+#                                        from rustup, outside the dev shell
+#   scripts/verify reaper                the comparison with REAPER
+#                                        (ADR 33, ADR 34); Linux only
+#   scripts/verify full [--base REV]     the default, then tla, mutants and
+#                                        the Nix build
+#
+# REV defaults to origin/main. Every mode but kani runs inside `nix develop`.
+set -euo pipefail
+
+# Not `git rev-parse --show-toplevel`: in a hook, Git sets GIT_DIR, and then
+# the top level is wherever the hook runs.
+root=$(cd "$(dirname "$0")/.." && pwd)
+
+mode=check
+base=origin/main
+harness=()
+args=("$@")
+while (($# > 0)); do
+  case $1 in
+  quick | check | mutants | tla | kani | reaper | full) mode=$1 ;;
+  --base)
+    base=${2:?--base needs a revision}
+    shift
+    ;;
+  --harness)
+    harness=(--exact --harness "${2:?--harness needs a name}")
+    shift
+    ;;
+  *)
+    sed -n '2,/^set /p' "$0" | sed '$d; s/^# \{0,1\}//' >&2
+    exit 2
+    ;;
+  esac
+  shift
+done
+
+# Kani installs its own nightly with rustup, which the dev shell hides (ADR 11).
+if [ "$mode" != kani ] && [ -z "${IN_NIX_SHELL:-}" ]; then
+  exec nix develop "$root" --command "$0" "${args[@]}"
+fi
+cd "$root"
+git rev-parse --verify --quiet "$base^{commit}" >/dev/null || base=main
+
+out=$root/target/verify
+logs=$out/logs
+rm -rf "$logs" "$out/checklist.md"
+mkdir -p "$logs"
+summary=$out/summary.md
+failed=0
+rows=()
+fixes=()
+
+# step NAME FIX COMMAND...: runs COMMAND with its output in logs/NAME.log.
+# FIX says what to do when it fails, and goes into the summary.
+step() {
+  local name=$1 fix=$2 log=$logs/$1.log started status=0
+  shift 2
+  started=$(date +%s)
+  "$@" >"$log" 2>&1 || status=$?
+  local took=$(($(date +%s) - started))s
+  if ((status == 0)); then
+    printf 'pass  %-14s %5s  %s\n' "$name" "$took" "${log#"$root"/}"
+    rows+=("| $name | pass | $took | \`${log#"$root"/}\` |")
+  else
+    printf 'FAIL  %-14s %5s  %s\n' "$name" "$took" "${log#"$root"/}"
+    tail -n 30 "$log" | sed 's/^/      /'
+    printf '      fix: %s\n' "$fix"
+    rows+=("| $name | **fail** | $took | \`${log#"$root"/}\` |")
+    fixes+=("- $name: $fix")
+    failed=1
+  fi
+}
+
+# The audit writes its lists into a scratch directory, and they must equal
+# the committed ones.
+audit() {
+  local dir=$out/audit
+  rm -rf "$dir" && mkdir -p "$dir" || return
+  # A step runs without `set -e`, so each command's status is chained.
+  (cd spec && lake env lean --run Audit.lean "$dir") &&
+    diff -u spec/theorems.txt "$dir/theorems.txt" &&
+    diff -u spec/definitions.txt "$dir/definitions.txt"
+}
+
+# A seed proptest saved while the tests ran must be committed.
+regressions_committed() {
+  local new
+  new=$(git status --porcelain -- '*.proptest-regressions')
+  [ -z "$new" ] || {
+    printf '%s\n' "$new"
+    return 1
+  }
+}
+
+adr_index() {
+  adrs doctor && adrs generate toc | diff -u docs/adr/README.md -
+}
+
+# Mutates the lines changed since $base in the core, the agent interface
+# and the editor, as the Mutants workflow does for a pull request.
+mutants() {
+  local name paths package changes status=0
+  while read -r name package paths; do
+    changes=$out/mutants-$name.diff
+    # shellcheck disable=SC2086 # one argument per path
+    git diff "$base" -- $paths >"$changes" || return
+    if [ ! -s "$changes" ]; then
+      echo "No change to $paths since $base."
+      continue
+    fi
+    PATHOS_MODEL=$root/spec/.lake/build/bin/pathos-model \
+      cargo mutants -p "$package" --test-package "$package" \
+      -o "$out/mutants-$name" --in-diff "$changes" || status=1
+  done <<'LIST'
+core pathos-core crates/pathos-core
+agent pathos-agent crates/pathos-agent
+editor pathos src/editor.rs
+LIST
+  return "$status"
+}
+
+tla() {
+  local spec status=0
+  for spec in tla/*.tla; do
+    (cd tla && tlc -workers auto -metadir "$out/tla-states" "$(basename "${spec%.tla}")") |
+      tee "$out/tlc.txt"
+    # TLC exits with 0 on some errors, such as a parse error.
+    grep -q 'Model checking completed. No error has been found.' "$out/tlc.txt" || status=1
+  done
+  return "$status"
+}
+
+quick() {
+  step fmt "run cargo fmt --all" \
+    cargo fmt --all --check
+  step clippy "fix each warning; do not add #[allow] to pass it" \
+    cargo clippy --locked --workspace --all-targets -- -D warnings
+  step deny "read the advisory or license in the log; update or replace the crate (ADR 8)" \
+    cargo deny check
+  step test "fix the code or the test the log names" \
+    cargo test --locked --workspace --exclude pathos-core
+  step added-lines "do what the log says for each line; do not reword the line to slip past the check" \
+    scripts/check-escape-hatches.sh "$base"
+}
+
+check() {
+  quick
+  step lean "fix the Lean error in the log; the model comes first (ADR 3)" \
+    lake -d spec build
+  step audit "regenerate the lists with (cd spec && lake env lean --run Audit.lean) and commit them (ADR 9, ADR 12)" \
+    audit
+  step core "the Rust core is wrong unless the model was meant to change; fix the core, not the model or the generators (ADR 3, ADR 4)" \
+    cargo test --locked -p pathos-core
+  step regressions "commit the new seeds in the *.proptest-regressions files the log lists" \
+    regressions_committed
+  step loom "the hand-off broke an invariant of tla/SnapshotHandoff.tla; fix crates/pathos-playback/src/handoff.rs (ADR 18)" \
+    env RUSTFLAGS="${RUSTFLAGS:-} --cfg loom" \
+    cargo test --locked -p pathos-playback --release --target-dir target/loom
+  step adr "fix the ADR adrs doctor names, or regenerate the index with adrs generate toc > docs/adr/README.md" \
+    adr_index
+}
+
+case $mode in
+quick) quick ;;
+check) check ;;
+mutants)
+  step lean "fix the Lean error in the log" lake -d spec build
+  step mutants "close each missed mutant in target/verify/mutants-*/mutants.out/missed.txt with a test or a better generator (ADR 13)" mutants
+  ;;
+tla)
+  step tla "the specification found a violation; read the trace in the log (ADR 17)" tla
+  ;;
+kani)
+  if ! cargo kani --version >/dev/null 2>&1; then
+    echo "cargo kani is not installed. Install the version in .github/workflows/kani.yml:" >&2
+    echo "  cargo install --locked kani-verifier --version $(sed -n 's/^ *KANI_VERSION: *//p' .github/workflows/kani.yml) && cargo kani setup" >&2
+    exit 1
+  fi
+  step kani "read the failed property in the log; a harness that runs out of time needs a smaller bound (ADR 11, ADR 16)" \
+    bash -c 'cd crates/pathos-core && cargo kani --output-format terse \
+      -Z unstable-options --harness-timeout 10m "$@"' kani "${harness[@]}"
+  ;;
+reaper)
+  if [ "$(uname -s)" != Linux ]; then
+    echo "The comparison with REAPER runs on Linux only (ADR 34)." >&2
+    exit 1
+  fi
+  step reaper "find which of pathos, the converter or the JSFX instrument differs; record a deliberate difference in an ADR (ADR 33)" \
+    nix develop "$root#reaper" --command cargo test --locked -p pathos-reaper -- --ignored
+  ;;
+full)
+  check
+  step tla "the specification found a violation; read the trace in the log (ADR 17)" tla
+  step mutants "close each missed mutant in target/verify/mutants-*/mutants.out/missed.txt with a test or a better generator (ADR 13)" mutants
+  step nix-build "the package build failed; read the log" nix build "$root#default" --no-link
+  ;;
+esac
+
+if [ "$mode" = check ] || [ "$mode" = full ] || [ "$mode" = quick ]; then
+  scripts/verification-checklist.sh "$base" >"$out/checklist.md"
+fi
+
+{
+  echo "# Verification"
+  echo
+  echo "Revision $(git rev-parse --short HEAD), compared with $base; mode \`$mode\`."
+  if ! git diff --quiet HEAD --; then
+    echo "The working tree has changes that are not committed."
+  fi
+  echo
+  echo "| Step | Result | Time | Log |"
+  echo "|---|---|---|---|"
+  printf '%s\n' "${rows[@]}"
+  if ((${#fixes[@]} > 0)); then
+    echo
+    echo "## What to fix"
+    echo
+    printf '%s\n' "${fixes[@]}"
+  fi
+  if [ -s "$out/checklist.md" ]; then
+    echo
+    echo "## Checklist items this change triggers"
+    echo
+    echo "Each one needs a check of its own; see docs/verification.md."
+    echo
+    cat "$out/checklist.md"
+  fi
+  case $mode in
+  quick) echo && echo "Not run in this mode: the Lean model, the audit, the core, loom and the ADR index (\`scripts/verify\`)." ;;
+  check) echo && echo "Not run in this mode: TLC, mutants and the Nix build (\`scripts/verify full\`), Kani (\`scripts/verify kani\`) and REAPER (\`scripts/verify reaper\`)." ;;
+  full) echo && echo "Not run in this mode: Kani (\`scripts/verify kani\`) and REAPER (\`scripts/verify reaper\`)." ;;
+  esac
+} >"$summary"
+
+echo "summary: ${summary#"$root"/}"
+exit "$failed"

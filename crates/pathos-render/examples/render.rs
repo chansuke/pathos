@@ -14,7 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for command in phrase() {
         history.edit(Edit::Apply(command))?;
     }
-    let rate = NonZeroU32::new(48_000).unwrap();
+    let rate = NonZeroU32::new(48_000).ok_or("a sample rate is not zero")?;
     // Four beats at 120 BPM last two seconds.
     let samples = render(history.present(), rate, 2 * 48_000);
     wav::write(&mut BufWriter::new(File::create(&path)?), rate, &samples)?;
