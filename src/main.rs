@@ -611,7 +611,11 @@ fn meter_view(width: f32, meter: &Meter) -> Vec<Div> {
         // The held peak, in the color of its zone (ADR 30).
         if let Some(mark) = layout::hold_rect(width, channel, meter::fraction(hold)) {
             let held = mark.x - rect.x;
-            let (_, color) = zones.into_iter().find(|&(to, _)| held < to).unwrap();
+            // Past the last zone, which ends at infinity, is only a NaN.
+            let color = zones
+                .into_iter()
+                .find(|&(to, _)| held < to)
+                .map_or(ERROR, |(_, color)| color);
             elements.push(at(mark).bg(rgb(color)));
         }
     }
@@ -804,7 +808,7 @@ impl Render for Pathos {
             (None, None, Ok(_)) => None,
         };
         if let Ok(output) = &self.output {
-            let now = Instant::now();
+            let now = clock();
             let elapsed = self.metered.map_or(Duration::ZERO, |then| now - then);
             self.metered = Some(now);
             self.meter.update(output.transport().take_peaks(), elapsed);
@@ -1363,6 +1367,26 @@ fn key(event: &KeyDownEvent) -> Option<Key> {
     }
 }
 
+/// The time of a frame. Only the window reads the clock, and passes the
+/// elapsed time to the meter (clippy.toml).
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the window is where the clock is read"
+)]
+fn clock() -> Instant {
+    Instant::now()
+}
+
+/// Where the window answers agents. Only `main.rs` reads the environment
+/// (clippy.toml).
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the window reads the environment and passes it in"
+)]
+fn socket_path() -> PathBuf {
+    pathos_agent::socket_path(|name| std::env::var_os(name))
+}
+
 fn main() {
     Application::new().run(|cx: &mut App| {
         cx.text_system()
@@ -1372,7 +1396,7 @@ fn main() {
             ])
             .expect("gpui rejected the bundled JetBrains Mono");
         let bounds = Bounds::centered(None, size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)), cx);
-        cx.open_window(
+        let opened = cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
@@ -1408,7 +1432,7 @@ fn main() {
                         metered: None,
                         proposals: Proposals::default(),
                     };
-                    let socket = pathos_agent::socket_path();
+                    let socket = socket_path();
                     match Listener::bind(&socket) {
                         Ok(listener) => Pathos::listen(listener, cx),
                         Err(error) => {
@@ -1427,8 +1451,12 @@ fn main() {
                     pathos
                 })
             },
-        )
-        .unwrap();
+        );
+        if let Err(error) = opened {
+            eprintln!("pathos cannot open its window: {error}");
+            cx.quit();
+            return;
+        }
         cx.activate(true);
     });
 }

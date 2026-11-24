@@ -7,6 +7,10 @@ use pathos_core::{Command, Edit, History, PPQ};
 use pathos_playback::output::Output;
 use pathos_render::Score;
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the example plays the phrase for a fixed time and then stops"
+)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut history = History::default();
     history.edit(Edit::Apply(Command::AddTrack))?;
