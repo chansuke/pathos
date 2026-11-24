@@ -95,7 +95,10 @@ impl std::error::Error for TooLong {}
 /// Renders `project` at [`SAMPLE_RATE`] and measures the master and each
 /// track.
 pub fn measure(project: &Project) -> Result<Report, TooLong> {
-    let rate = NonZeroU32::new(SAMPLE_RATE).unwrap();
+    const RATE: NonZeroU32 = match NonZeroU32::new(SAMPLE_RATE) {
+        Some(rate) => rate,
+        None => panic!("SAMPLE_RATE is not zero"),
+    };
     let frames = song_frames(project);
     let seconds = frames as f64 / f64::from(SAMPLE_RATE);
     if frames > MAX_SECONDS * u64::from(SAMPLE_RATE) {
@@ -104,7 +107,7 @@ pub fn measure(project: &Project) -> Result<Report, TooLong> {
     let frames = frames as usize;
     let bars = bars(project, frames);
     let measured =
-        |project: &Project| measurements(&pathos_render::render(project, rate, frames), &bars);
+        |project: &Project| measurements(&pathos_render::render(project, RATE, frames), &bars);
     let tracks = (0..project.track_count())
         .map(|track| TrackMeasurements {
             track,
