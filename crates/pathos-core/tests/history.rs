@@ -1,6 +1,11 @@
 //! Expected values written down by hand, so that a mistake shared by this crate
 //! and the model does not go unnoticed.
 
+#![expect(
+    clippy::unwrap_used,
+    reason = "helpers outside #[test] functions fail the test by panicking"
+)]
+
 use pathos_core::{Command, Edit, History, Note};
 
 fn apply(history: &mut History, command: Command) {

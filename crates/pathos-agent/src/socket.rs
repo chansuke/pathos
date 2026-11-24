@@ -1,5 +1,6 @@
 //! The Unix socket on which the window answers agents (ADR 35).
 
+use std::ffi::OsString;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
@@ -17,12 +18,13 @@ use crate::protocol::{Request, Response};
 pub const MAX_REQUEST: u64 = 1 << 20;
 
 /// Where the window listens: `$PATHOS_SOCKET`, or `pathos/agent.sock` in
-/// `$XDG_RUNTIME_DIR` or else in the temporary directory.
-pub fn socket_path() -> PathBuf {
-    if let Some(path) = std::env::var_os("PATHOS_SOCKET") {
+/// `$XDG_RUNTIME_DIR` or else in the temporary directory. `env` looks up a
+/// variable; the window and `pathos-mcp` pass a lookup of their own environment.
+pub fn socket_path(env: impl Fn(&str) -> Option<OsString>) -> PathBuf {
+    if let Some(path) = env("PATHOS_SOCKET") {
         return PathBuf::from(path);
     }
-    let directory = std::env::var_os("XDG_RUNTIME_DIR")
+    let directory = env("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
     directory.join("pathos").join("agent.sock")
@@ -198,6 +200,33 @@ mod tests {
     use crate::proposal::Proposals;
     use crate::protocol::Status;
     use pathos_core::Document;
+
+    #[test]
+    fn the_socket_path_follows_the_given_environment() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| OsString::from(value))
+            }
+        };
+        assert_eq!(
+            socket_path(env(&[
+                ("PATHOS_SOCKET", "/a/b.sock"),
+                ("XDG_RUNTIME_DIR", "/run")
+            ])),
+            PathBuf::from("/a/b.sock")
+        );
+        assert_eq!(
+            socket_path(env(&[("XDG_RUNTIME_DIR", "/run/user/1")])),
+            PathBuf::from("/run/user/1/pathos/agent.sock")
+        );
+        assert_eq!(
+            socket_path(env(&[])),
+            std::env::temp_dir().join("pathos").join("agent.sock")
+        );
+    }
 
     /// A fresh directory for one test. Its socket goes in `pathos` inside
     /// it, which [`Listener::bind`] creates.
