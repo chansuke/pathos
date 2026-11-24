@@ -35,33 +35,18 @@ const CRATES: &[(&str, &[&str])] = &[
 const LAYERS: &[&[&str]] = &[
     // Plain Rust, with no window: their tests run without one.
     &["file", "layout", "meter", "readout"],
-    &["editor"],
+    &["editor", "theme"],
     // The views that gpui draws.
     &["agent"],
 ];
 
 /// The modules that draw with gpui. The others are plain Rust, so their
 /// tests need no window.
-const VIEWS: &[&str] = &["agent"];
+const VIEWS: &[&str] = &["agent", "theme"];
 
 /// Uses of `main.rs` from a module that are allowed: the window's view,
 /// whose `Context` a view of a part of the window draws in.
 const ROOT_ITEMS: &[(&str, &str)] = &[("agent", "Pathos")];
-
-/// Uses that break the layers today. The list may only shrink: remove an
-/// entry when its use is gone, and never add one.
-const KNOWN: &[(&str, &str)] = &[
-    ("agent", "ACCENT"),
-    ("agent", "BACKGROUND"),
-    ("agent", "CONTROL"),
-    ("agent", "CONTROL_BORDER"),
-    ("agent", "GRID"),
-    ("agent", "MONO"),
-    ("agent", "PANEL"),
-    ("agent", "SOFT_TEXT"),
-    ("agent", "SUBTLE_TEXT"),
-    ("agent", "key_cap"),
-];
 
 #[test]
 fn crates_depend_only_on_the_crates_below_them() {
@@ -121,16 +106,7 @@ fn app_modules_use_only_lower_layers() {
         "These modules of the app are not in LAYERS in tests/architecture.rs: {unknown:?}.\n\
          Put each in the lowest layer that holds everything it uses."
     );
-    let known: BTreeSet<_> = KNOWN.iter().copied().collect();
-    let found: BTreeSet<_> = violations
-        .iter()
-        .map(|v| (v.from.as_str(), v.item.as_str()))
-        .collect();
-    let new: Vec<_> = violations
-        .iter()
-        .filter(|v| !known.contains(&(v.from.as_str(), v.item.as_str())))
-        .map(|v| v.message.as_str())
-        .collect();
+    let new: Vec<_> = violations.iter().map(|v| v.message.as_str()).collect();
     assert!(
         new.is_empty(),
         "{} uses break the layers of the app:\n  {}\n\n\
@@ -139,11 +115,6 @@ fn app_modules_use_only_lower_layers() {
          colors into theme.rs, or let the caller pass it in. Move drawing to main.rs or a view; layout returns rects.",
         new.len(),
         new.join("\n  ")
-    );
-    let gone: Vec<_> = KNOWN.iter().filter(|use_| !found.contains(use_)).collect();
-    assert!(
-        gone.is_empty(),
-        "These uses in KNOWN in tests/architecture.rs are gone; remove them from the list: {gone:?}"
     );
 }
 
