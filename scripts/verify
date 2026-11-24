@@ -9,8 +9,9 @@
 #   scripts/verify quick [--base REV]    format, clippy, cargo deny, the
 #                                        tests of every crate but the core
 #                                        and the lines added since REV
-#   scripts/verify mutants [--base REV]  cargo mutants on the core lines
-#                                        changed since REV (ADR 13)
+#   scripts/verify mutants [--base REV]  cargo mutants on the lines of the
+#                                        core, the agent interface and the
+#                                        editor changed since REV (ADR 13)
 #   scripts/verify tla                   TLC on each specification in tla/
 #                                        (ADR 17)
 #   scripts/verify kani [--harness NAME] the Kani harnesses of the core, or
@@ -113,16 +114,27 @@ adr_index() {
   adrs doctor && adrs generate toc | diff -u docs/adr/README.md -
 }
 
+# Mutates the lines changed since $base in the core, the agent interface
+# and the editor, as the Mutants workflow does for a pull request.
 mutants() {
-  local changes=$out/mutants.diff
-  git diff "$base" -- crates/pathos-core >"$changes" || return
-  if [ ! -s "$changes" ]; then
-    echo "No change to crates/pathos-core since $base."
-    return 0
-  fi
-  PATHOS_MODEL=$root/spec/.lake/build/bin/pathos-model \
-    cargo mutants -p pathos-core --test-package pathos-core \
-    -o "$out" --in-diff "$changes"
+  local name paths package changes status=0
+  while read -r name package paths; do
+    changes=$out/mutants-$name.diff
+    # shellcheck disable=SC2086 # one argument per path
+    git diff "$base" -- $paths >"$changes" || return
+    if [ ! -s "$changes" ]; then
+      echo "No change to $paths since $base."
+      continue
+    fi
+    PATHOS_MODEL=$root/spec/.lake/build/bin/pathos-model \
+      cargo mutants -p "$package" --test-package "$package" \
+      -o "$out/mutants-$name" --in-diff "$changes" || status=1
+  done <<'LIST'
+core pathos-core crates/pathos-core
+agent pathos-agent crates/pathos-agent
+editor pathos src/editor.rs
+LIST
+  return "$status"
 }
 
 tla() {
@@ -171,7 +183,7 @@ quick) quick ;;
 check) check ;;
 mutants)
   step lean "fix the Lean error in the log" lake -d spec build
-  step mutants "close each missed mutant in target/verify/mutants.out/missed.txt with a test or a better generator (ADR 13)" mutants
+  step mutants "close each missed mutant in target/verify/mutants-*/mutants.out/missed.txt with a test or a better generator (ADR 13)" mutants
   ;;
 tla)
   step tla "the specification found a violation; read the trace in the log (ADR 17)" tla
@@ -197,7 +209,7 @@ reaper)
 full)
   check
   step tla "the specification found a violation; read the trace in the log (ADR 17)" tla
-  step mutants "close each missed mutant in target/verify/mutants.out/missed.txt with a test or a better generator (ADR 13)" mutants
+  step mutants "close each missed mutant in target/verify/mutants-*/mutants.out/missed.txt with a test or a better generator (ADR 13)" mutants
   step nix-build "the package build failed; read the log" nix build "$root#default" --no-link
   ;;
 esac
