@@ -238,10 +238,14 @@ impl Proposals {
 
     fn refresh(&mut self, document: &Document) {
         let edits = document.edits().len();
-        while let Some(index) = self.pending.iter().position(|p| p.base != edits) {
-            let proposal = self.pending.remove(index).unwrap();
-            self.decided.insert(proposal.id, Status::Stale);
-        }
+        let decided = &mut self.decided;
+        self.pending.retain(|proposal| {
+            let current = proposal.base == edits;
+            if !current {
+                decided.insert(proposal.id, Status::Stale);
+            }
+            current
+        });
     }
 }
 

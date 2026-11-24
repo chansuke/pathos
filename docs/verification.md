@@ -7,7 +7,7 @@ lists the items below that the change triggers.
 
 | Mode | What it runs |
 |---|---|
-| `scripts/verify quick` | `cargo fmt`, `cargo clippy`, `cargo deny` and the tests of every crate but the core |
+| `scripts/verify quick` | `cargo fmt`, `cargo clippy`, `cargo deny`, the tests of every crate but the core, and `scripts/check-escape-hatches.sh` on the lines added since `origin/main`; the pre-commit hook runs it |
 | `scripts/verify` | `quick`, then `lake -d spec build`, the audit of `spec/theorems.txt` and `spec/definitions.txt`, `cargo test -p pathos-core`, the check that new proptest seeds are committed, the loom tests and the ADR index |
 | `scripts/verify mutants` | `cargo mutants` on the lines of `crates/pathos-core`, `crates/pathos-agent` and `src/editor.rs` changed since `origin/main`, as CI does for a pull request (ADR 13) |
 | `scripts/verify tla` | TLC on each specification in `tla/` (ADR 17) |
