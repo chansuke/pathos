@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  check:
+  added-lines:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
