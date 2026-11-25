@@ -5,10 +5,10 @@ pathos is a DAW built with [gpui](https://gpui.rs). Build and run it inside
 
 ## Design decisions
 
-Consult `docs/adr/` before changing the design, and follow the accepted ADRs.
-Record a new significant decision as an ADR with `adrs new "<title>"`, then
-regenerate the index with `adrs generate toc > docs/adr/README.md`. Check the
-records with `adrs doctor`.
+Read the accepted ADRs in [docs/adr/README.md](docs/adr/README.md) before
+changing the design, and follow them. Record a new significant decision with
+`adrs new "<title>"`, then regenerate the index with
+`adrs generate toc > docs/adr/README.md`.
 
 ## Specification
 
@@ -20,42 +20,30 @@ The project changes only by applying a `Command` (ADR 2).
 - When the differential tests fail, the Rust core is wrong unless the model was
   meant to change. Do not weaken the model, the generators or the comparison to
   make a failure go away.
-- Proofs are not required to merge (ADR 4). State a property even if its proof
-  is `sorry`, never delete a theorem because its proof is hard, and do not add
-  axioms. Never replace a finished proof with `sorry` (ADR 9).
-- Keep a failing trace as a regression: commit
-  `crates/pathos-core/tests/differential.proptest-regressions`, and add the
-  trace to `core_agrees_with_model_on_boundaries` when it sits on a boundary of
-  a rule.
+- State a property even if its proof is `sorry` (ADR 4). When a failing trace
+  sits on a boundary of a rule, add it to
+  `core_agrees_with_model_on_boundaries`.
+- When REAPER disagrees (ADR 33), the cause is pathos, the converter or the
+  JSFX instrument; record a deliberate difference in an ADR.
 
-Commands:
+## Before you call a change done
 
-- `lake -d spec build`: build the model and its executable.
-- `cargo test -p pathos-core`: check the Rust core against the model. Build the
-  model first. `PROPTEST_CASES` sets the number of generated traces.
-- `nix develop .#reaper -c cargo test -p pathos-reaper -- --ignored`: compare
-  the scenarios and generated projects with REAPER (ADR 33), on Linux. CI does
-  not run it (ADR 34): the pre-push hook in `.githooks`, which the dev shell
-  enables, runs it before a push that changes `crates/pathos-core`,
-  `crates/pathos-render` or `crates/pathos-reaper`. Put the line it prints,
-  `REAPER comparison: passed <key>`, in the description of such a pull
-  request, or CI fails; the key (`scripts/reaper-key`) names the code that
-  was compared, so a line from an older push fails too. Do not skip the hook. When
-  REAPER disagrees, the cause is
-  pathos, the converter or the JSFX instrument; record a deliberate difference
-  in an ADR, and do not loosen the layers to make a failure go away.
-- `grep -rw sorry spec --include='*.lean' | wc -l`: count unfinished proofs.
-- `cd spec && lake env lean --run Audit.lean`: regenerate `theorems.txt`, which
-  marks each theorem proved or unfinished and checks its axioms, and
-  `definitions.txt`, which gives each definition a fingerprint of its body.
-  Commit both; CI fails when either is out of date, when a theorem is removed
-  or when a proved theorem becomes unfinished, and warns on each definition
-  that changes.
-- `cargo test -p pathos-core --test differential generators_reach_every_rule -- --nocapture`:
-  show how often the generators reach each rule. If a rule falls below the
-  minimum, make the generators reach it more often; do not lower the minimum.
-- `PATHOS_MODEL=$PWD/spec/.lake/build/bin/pathos-model cargo mutants -p pathos-core --test-package pathos-core`:
-  check that the tests catch each mutant of the Rust core (ADR 13); add
-  `--in-diff <file>` to mutate only the lines of a diff. Close a missed mutant
-  with a test or a better generator. Exclude it in `.cargo/mutants.toml`, with
-  the reason, only when no test can catch it.
+Run `scripts/verify`, then read `target/verify/summary.md`: it says what to
+fix for each failed step and lists the items of
+[docs/verification.md](docs/verification.md) that the change triggers. Check
+each of them. `scripts/verify quick` runs the fast part, as the pre-commit
+hook does; `docs/verification.md` lists the other modes, such as `mutants`,
+`kani`, `tla` and `reaper`.
+
+The checks hold the rules: `tests/architecture.rs` for the direction of
+dependencies, `[workspace.lints]` and `clippy.toml` for the banned APIs,
+`scripts/check-escape-hatches.sh` for added lines, the Audit and the Spec
+workflow for the proofs, and the pre-push hook for the comparison with REAPER.
+When one fails, its message names the fix. Change the design to pass it; do
+not silence the check, skip a hook, or write a line that a run did not print.
+
+## When a bug is fixed or a review finds something
+
+First ask whether a lint, a type, a test, the architecture check, or a
+`docs/verification.md` item can stop it from coming back, and add that.
+Write a rule here only when none of them can express it.
