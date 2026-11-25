@@ -1,5 +1,9 @@
 # cargo-mutants (ADR 13).
 
+# Leave the files that .gitignore names out of the build directories. The
+# worktrees under `.wt` hold their own `target` directories and fill the disk.
+gitignore = true
+
 exclude_globs = [
     # Kani harnesses build only under `cfg(kani)`, so no test can catch a
     # mutant of them; the Kani workflow checks them instead.
@@ -11,4 +15,7 @@ exclude_re = [
     # starts there, whose click adds nothing to the block, so `<=` adds the
     # same clicks. Keep the loop the only `<` of the function.
     "replace < with <= in Score::add_clicks",
+    # Every caller of `lufs` keeps only loudness above a finite gate, so the
+    # minus infinity that `>=` gives for silence never leaves the function.
+    "replace > with >= in lufs",
 ]
