@@ -33,6 +33,12 @@ ignore = true
 [bans]
 multiple-versions = "allow"
 wildcards = "deny"
+# Only the app draws a window, and only playback opens an audio device, so the
+# other crates build and test without either.
+deny = [
+    { crate = "gpui", wrappers = ["pathos"], reason = "only the app draws with gpui: put window code in src/, and keep the crates plain Rust" },
+    { crate = "cpal", wrappers = ["pathos-playback"], reason = "only pathos-playback opens an audio device (ADR 18): render offline with pathos-render, or play through pathos-playback" },
+]
 
 [sources]
 unknown-registry = "deny"

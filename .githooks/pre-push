@@ -1,7 +1,9 @@
 #!/bin/sh
 # Compares with REAPER before a push that changes the core, the render or the
 # converter, since CI does not (ADR 34). A commit whose code has passed is not
-# compared again. `git push --no-verify` skips this.
+# compared again. Either way the hook prints the line, with the key of the
+# code from scripts/reaper-key, that the REAPER workflow looks for in the
+# pull request. `git push --no-verify` skips this.
 set -eu
 
 paths="crates/pathos-core crates/pathos-render crates/pathos-reaper"
@@ -20,7 +22,12 @@ while read -r local_ref local_sha _remote_ref _remote_sha; do
   # The trees of the paths identify the code that was compared.
   # shellcheck disable=SC2086
   key="$(for path in $paths; do git rev-parse "$local_sha:$path"; done | tr '\n' ' ')"
-  grep -qxF "$key" "$passed" 2>/dev/null && continue
+  line="REAPER comparison: passed $(scripts/reaper-key "$local_sha")"
+  if grep -qxF "$key" "$passed" 2>/dev/null; then
+    echo "pre-push: $local_ref was compared with REAPER before; put this line in the description of the pull request:" >&2
+    echo "$line" >&2
+    continue
+  fi
 
   if [ "$(uname -s)" != Linux ]; then
     echo "pre-push: $local_ref changes $paths; compare it with REAPER on Linux before its pull request (ADR 34)" >&2
@@ -38,7 +45,7 @@ while read -r local_ref local_sha _remote_ref _remote_sha; do
   if nix develop .#reaper -c cargo test -p pathos-reaper -- --ignored </dev/null >&2; then
     echo "$key" >>"$passed"
     echo "pre-push: put this line in the description of the pull request:" >&2
-    echo "REAPER comparison: passed" >&2
+    echo "$line" >&2
   else
     echo "pre-push: the comparison with REAPER failed" >&2
     status=1

@@ -3,6 +3,11 @@
 //! bound (ADR 17, ADR 18):
 //! `RUSTFLAGS="--cfg loom" cargo test -p pathos-playback --release`.
 
+#![expect(
+    clippy::unwrap_used,
+    reason = "helpers outside #[test] functions fail the test by panicking"
+)]
+
 #[cfg(loom)]
 use loom::{
     sync::{Arc, Mutex},

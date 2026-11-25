@@ -1,6 +1,11 @@
 //! The WAV file of a render holds its samples bit for bit and is read by
 //! another WAV library.
 
+#![expect(
+    clippy::unwrap_used,
+    reason = "helpers outside #[test] functions fail the test by panicking"
+)]
+
 use std::io::Cursor;
 use std::num::NonZeroU32;
 

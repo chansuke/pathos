@@ -1,0 +1,15 @@
+# Tests may unwrap; product code may not (see [workspace.lints]).
+allow-unwrap-in-tests = true
+
+# Each reason is what Clippy prints, so it names what to do instead. A call
+# that truly needs the method takes
+# `#[expect(clippy::disallowed_methods, reason = "...")]` on the smallest item.
+disallowed-methods = [
+    { path = "std::time::Instant::now", reason = "pass the elapsed time in, as Meter takes a Duration; only the window in main.rs reads the clock" },
+    { path = "std::time::SystemTime::now", reason = "pass the time in, so that tests and the model see the same value; only main.rs reads the clock" },
+    { path = "std::thread::sleep", reason = "do not wait on a timer for something that will happen: wait on the event (a channel, a join, the audio callback). The audio thread must never sleep (ADR 18)" },
+    { path = "std::env::var", reason = "take the value as an argument; only main.rs, a bin or a test reads the environment, so tests that run in parallel do not share it" },
+    { path = "std::env::var_os", reason = "take the value as an argument; only main.rs, a bin or a test reads the environment, so tests that run in parallel do not share it" },
+    { path = "std::env::set_var", reason = "tests run in parallel in one process: pass the value as an argument or with Command::env instead of changing the process environment" },
+    { path = "std::env::remove_var", reason = "tests run in parallel in one process: pass the value as an argument or with Command::env_remove instead of changing the process environment" },
+]

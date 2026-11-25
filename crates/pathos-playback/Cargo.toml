@@ -16,6 +16,5 @@ pathos-render = { path = "../pathos-render", version = "0.1.0" }
 [target.'cfg(loom)'.dependencies]
 loom = "0.7"
 
-[lints.rust]
-# The loom tests build with `--cfg loom` (ADR 18).
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
+[lints]
+workspace = true

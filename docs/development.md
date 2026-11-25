@@ -43,8 +43,10 @@ nix develop .#reaper -c cargo test -p pathos-reaper -- --ignored
 CI does not run it (ADR 34). The dev shell sets `core.hooksPath` to
 `.githooks`, whose pre-push hook runs it before a push that changes
 `crates/pathos-core`, `crates/pathos-render` or `crates/pathos-reaper`, and
-skips code that has passed before. Such a pull request needs the line
-`REAPER comparison: passed` in its description, which CI checks.
+skips code that has passed before. Either way it prints the line
+`REAPER comparison: passed <key>`, where the key from `scripts/reaper-key`
+names the code that was compared. Such a pull request needs that line in its
+description, and CI checks that the key matches its head.
 
 REAPER is not free software. Its evaluation lasts 60 days, after which a
 license is needed.

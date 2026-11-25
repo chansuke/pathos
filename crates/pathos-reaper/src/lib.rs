@@ -2,7 +2,7 @@
 //! into a REAPER project, whose tracks play a JSFX copy of the built-in
 //! instrument (ADR 15).
 
-use std::fmt::Write as _;
+use std::fmt;
 use std::num::NonZeroU32;
 
 use pathos_core::{CENTER_PAN, Clip, PPQ, Project, Tick, UNITY_VOLUME};
@@ -38,7 +38,10 @@ pub fn instrument(name: &str) -> String {
     for (pitch, frequency) in FREQUENCIES.iter().enumerate() {
         // Every f32 is exact as an f64, and Debug prints an f64 so that it
         // reads back to the same value.
-        writeln!(table, "freq[{pitch}] = {:?};", f64::from(*frequency)).unwrap();
+        push_line(
+            &mut table,
+            format_args!("freq[{pitch}] = {:?};", f64::from(*frequency)),
+        );
     }
     include_str!("instrument.jsfx")
         .replace("IMPULSES", &impulses.to_string())
@@ -78,39 +81,46 @@ pub fn convert(project: &Project, rate: NonZeroU32, frames: u64, layer: Layer) -
     let mut out = String::new();
     // Rust writes a float in the fewest decimal digits that read back to it,
     // without an exponent.
-    writeln!(out, "<REAPER_PROJECT 0.1 \"7.86\" 0").unwrap();
-    writeln!(out, "  SAMPLERATE {rate} 1 0").unwrap();
-    writeln!(
-        out,
-        "  TEMPO {} 4 4",
-        bpm(project.tempo()[0].us_per_quarter)
-    )
-    .unwrap();
+    push_line(&mut out, format_args!("<REAPER_PROJECT 0.1 \"7.86\" 0"));
+    push_line(&mut out, format_args!("  SAMPLERATE {rate} 1 0"));
+    push_line(
+        &mut out,
+        format_args!("  TEMPO {} 4 4", bpm(project.tempo()[0].us_per_quarter)),
+    );
     // A pan of 0 dB at the center: a linear balance, as pathos pans (ADR 21).
-    writeln!(out, "  PANLAW 1").unwrap();
-    writeln!(out, "  RENDER_FILE \"{RENDER_DIRECTORY}\"").unwrap();
-    writeln!(out, "  RENDER_PATTERN \"{RENDER_NAME}\"").unwrap();
-    writeln!(out, "  RENDER_FMT 0 2 {rate}").unwrap();
+    push_line(&mut out, format_args!("  PANLAW 1"));
+    push_line(
+        &mut out,
+        format_args!("  RENDER_FILE \"{RENDER_DIRECTORY}\""),
+    );
+    push_line(&mut out, format_args!("  RENDER_PATTERN \"{RENDER_NAME}\""));
+    push_line(&mut out, format_args!("  RENDER_FMT 0 2 {rate}"));
     // A time range from 0 to `length`, with no tail.
-    writeln!(out, "  RENDER_RANGE 0 0 {length} 0 0").unwrap();
-    writeln!(out, "  RENDER_DITHER 0").unwrap();
-    writeln!(out, "  RENDER_NORMALIZE 0 0 0").unwrap();
-    writeln!(out, "  RENDER_STEMS 0").unwrap();
+    push_line(&mut out, format_args!("  RENDER_RANGE 0 0 {length} 0 0"));
+    push_line(&mut out, format_args!("  RENDER_DITHER 0"));
+    push_line(&mut out, format_args!("  RENDER_NORMALIZE 0 0 0"));
+    push_line(&mut out, format_args!("  RENDER_STEMS 0"));
     // WAV of 32-bit floats.
-    writeln!(out, "  <RENDER_CFG\n    ZXZhdyAAAQ==\n  >").unwrap();
+    push_line(
+        &mut out,
+        format_args!("  <RENDER_CFG\n    ZXZhdyAAAQ==\n  >"),
+    );
     let master = match layer {
         Layer::Mix => f64::from(project.master_volume()) / f64::from(UNITY_VOLUME),
         Layer::Position => 1.0,
     };
-    writeln!(out, "  MASTER_VOLUME {master} 0 -1 -1 1").unwrap();
-    writeln!(out, "  <TEMPOENVEX\n    ACT 1 -1\n    DEFSHAPE 1 -1 -1").unwrap();
+    push_line(&mut out, format_args!("  MASTER_VOLUME {master} 0 -1 -1 1"));
+    push_line(
+        &mut out,
+        format_args!("  <TEMPOENVEX\n    ACT 1 -1\n    DEFSHAPE 1 -1 -1"),
+    );
     for change in project.tempo() {
         let time = seconds(project, 0, change.tick);
         let bpm = bpm(change.us_per_quarter);
         // Shape 1 holds the tempo until the next point.
-        writeln!(out, "    PT {time} {bpm} 1").unwrap();
+        push_line(&mut out, format_args!("    PT {time} {bpm} 1"));
     }
-    writeln!(out, "  >").unwrap();
+    push_line(&mut out, format_args!("  >"));
     let instrument = match layer {
         Layer::Mix => INSTRUMENT,
         Layer::Position => IMPULSES,
@@ -124,20 +134,20 @@ pub fn convert(project: &Project, rate: NonZeroU32, frames: u64, layer: Layer) -
             ),
             Layer::Position => (1.0, 0.0),
         };
-        writeln!(out, "  <TRACK").unwrap();
-        writeln!(out, "    VOLPAN {volume} {pan} -1 -1 1").unwrap();
-        writeln!(
-            out,
-            "    MUTESOLO {} {} 0",
-            u8::from(track.muted),
-            u8::from(track.solo)
-        )
-        .unwrap();
-        writeln!(
-            out,
-            "    <FXCHAIN\n      <JS {instrument} \"\"\n      >\n    >"
-        )
-        .unwrap();
+        push_line(&mut out, format_args!("  <TRACK"));
+        push_line(&mut out, format_args!("    VOLPAN {volume} {pan} -1 -1 1"));
+        push_line(
+            &mut out,
+            format_args!(
+                "    MUTESOLO {} {} 0",
+                u8::from(track.muted),
+                u8::from(track.solo)
+            ),
+        );
+        push_line(
+            &mut out,
+            format_args!("    <FXCHAIN\n      <JS {instrument} \"\"\n      >\n    >"),
+        );
         // REAPER plays a muted track that is soloed, which pathos does not
         // (ADR 21), so such a track keeps its solo but loses its notes.
         let silent = track.muted && track.solo;
@@ -149,9 +159,9 @@ pub fn convert(project: &Project, rate: NonZeroU32, frames: u64, layer: Layer) -
         if let Some(end) = clips.iter().map(|clip| clip.stop()).max() {
             item(&mut out, project, &clips, end);
         }
-        writeln!(out, "  >").unwrap();
+        push_line(&mut out, format_args!("  >"));
     }
-    writeln!(out, ">").unwrap();
+    push_line(&mut out, format_args!(">"));
     out
 }
 
@@ -160,11 +170,14 @@ pub fn convert(project: &Project, rate: NonZeroU32, frames: u64, layer: Layer) -
 /// that started between samples could move its notes by a sample; from the
 /// start, each note lies at its own nearest sample (ADR 32).
 fn item(out: &mut String, project: &Project, clips: &[&Clip], end: Tick) {
-    writeln!(out, "    <ITEM").unwrap();
-    writeln!(out, "      POSITION 0").unwrap();
-    writeln!(out, "      LENGTH {}", seconds(project, 0, end)).unwrap();
-    writeln!(out, "      <SOURCE MIDI").unwrap();
-    writeln!(out, "        HASDATA 1 {PPQ} QN").unwrap();
+    push_line(out, format_args!("    <ITEM"));
+    push_line(out, format_args!("      POSITION 0"));
+    push_line(
+        out,
+        format_args!("      LENGTH {}", seconds(project, 0, end)),
+    );
+    push_line(out, format_args!("      <SOURCE MIDI"));
+    push_line(out, format_args!("        HASDATA 1 {PPQ} QN"));
     // A note-off sorts before a note-on on the same tick.
     let mut events: Vec<(Tick, bool, u8, u8)> = Vec::new();
     for clip in clips {
@@ -179,14 +192,20 @@ fn item(out: &mut String, project: &Project, clips: &[&Clip], end: Tick) {
     for (tick, on, pitch, velocity) in events {
         let status = if on { 0x90 } else { 0x80 };
         let delta = tick - at;
-        writeln!(
+        push_line(
             out,
-            "        E {delta} {status:02x} {pitch:02x} {velocity:02x}"
-        )
-        .unwrap();
+            format_args!("        E {delta} {status:02x} {pitch:02x} {velocity:02x}"),
+        );
         at = tick;
     }
     // All notes off at the end of the item, as REAPER ends a MIDI item.
-    writeln!(out, "        E {} b0 7b 00", end - at).unwrap();
-    writeln!(out, "      >\n    >").unwrap();
+    push_line(out, format_args!("        E {} b0 7b 00", end - at));
+    push_line(out, format_args!("      >\n    >"));
+}
+
+/// Appends `text` and a newline to `out`. Formatting into a `String` cannot
+/// fail, so this returns nothing to unwrap.
+fn push_line(out: &mut String, text: fmt::Arguments<'_>) {
+    out.push_str(&text.to_string());
+    out.push('\n');
 }

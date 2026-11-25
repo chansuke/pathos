@@ -12,3 +12,6 @@ publish = false
 pathos-core = { path = "../pathos-core", version = "0.1.0" }
 pathos-render = { path = "../pathos-render", version = "0.1.0" }
 serde = { version = "1", features = ["derive"] }
+
+[lints]
+workspace = true

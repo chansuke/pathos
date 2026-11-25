@@ -1,0 +1,14 @@
+#!/bin/sh
+# Prints the key of the code that the comparison with REAPER tests at REV
+# (default HEAD): one hash of the trees of the core, the render and the
+# converter (ADR 34). The pre-push hook prints it in the line
+# `REAPER comparison: passed <key>` after a passing run, and the REAPER
+# workflow computes it again from the head of the pull request.
+#
+# usage: reaper-key [REV]
+set -eu
+
+rev=${1:-HEAD}
+for path in crates/pathos-core crates/pathos-render crates/pathos-reaper; do
+  git rev-parse "$rev:$path"
+done | git hash-object --stdin
