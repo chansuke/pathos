@@ -1,8 +1,16 @@
 //! What the audio thread does each block, apart from the device: take the
 //! newest score, follow the transport and render the frames (ADR 18).
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+#[cfg(loom)]
+use loom::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+};
+#[cfg(not(loom))]
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+};
 
 use pathos_render::{Frame, Score};
 
@@ -42,8 +50,11 @@ impl Default for Transport {
 }
 
 impl Transport {
+    /// Starts playback. The `Release` store pairs with the `Acquire` load in
+    /// [`begin_block`](Self::begin_block), so any [`seek`](Self::seek) written
+    /// before `play` is visible once playback is observed.
     pub fn play(&self) {
-        self.playing.store(true, Ordering::Relaxed);
+        self.playing.store(true, Ordering::Release);
     }
 
     pub fn stop(&self) {
@@ -55,7 +66,25 @@ impl Transport {
     }
 
     pub fn seek(&self, frame: u64) {
-        self.seek.store(frame.min(NO_SEEK - 1), Ordering::Relaxed);
+        // A store would do, but loom lets a later swap in `begin_block` miss a
+        // plain store (https://github.com/tokio-rs/loom/issues/254).
+        self.seek.swap(frame.min(NO_SEEK - 1), Ordering::Relaxed);
+    }
+
+    /// Reads whether playback is running and consumes any pending seek for the
+    /// audio thread's next block.
+    ///
+    /// Loads `playing` with `Acquire` before swapping `seek`, pairing with
+    /// [`play`](Self::play)'s `Release` store so a seek made before `play` is
+    /// always followed when `playing` is observed as `true`.
+    pub fn begin_block(&self) -> (bool, Option<u64>) {
+        let playing = self.playing.load(Ordering::Acquire);
+        let seek = if self.seek.load(Ordering::Relaxed) != NO_SEEK {
+            self.seek.swap(NO_SEEK, Ordering::Relaxed)
+        } else {
+            NO_SEEK
+        };
+        (playing, (seek != NO_SEEK).then_some(seek))
     }
 
     /// The frame that plays next, as of the last block.
@@ -72,7 +101,9 @@ impl Transport {
     }
 
     /// Raises the peaks to the loudest sample of each channel of `frames`.
-    fn meter(&self, frames: &[Frame]) {
+    /// Called by the audio thread after rendering each block of the song
+    /// (ADR 25).
+    pub fn meter(&self, frames: &[Frame]) {
         let mut loudest = [0.0f32; 2];
         for frame in frames {
             for (loudest, sample) in loudest.iter_mut().zip(frame) {
@@ -108,16 +139,16 @@ impl Engine {
     /// first two, silence in any further one, and the mean of both on a
     /// device with one channel (ADR 21). When the playhead reaches the end of
     /// the score's loop, it continues from the loop's start within the same
-    /// block (ADR 22). It is silent while stopped or before a score is
-    /// published. It does not wait, allocate or free.
+    /// block (ADR 22). It fills `out` with silence without advancing the
+    /// playhead while stopped, before a score is published, or when `channels`
+    /// is zero. It does not wait, allocate or free.
     pub fn fill(&mut self, out: &mut [f32], channels: usize) {
-        let seek = self.transport.seek.swap(NO_SEEK, Ordering::Relaxed);
-        if seek != NO_SEEK {
-            self.position = seek;
+        let (playing, seek) = self.transport.begin_block();
+        if let Some(frame) = seek {
+            self.position = frame;
         }
-        let playing = self.transport.is_playing();
         match self.player.current() {
-            Some(score) if playing => {
+            Some(score) if playing && channels > 0 => {
                 let looped = score.looped_frames();
                 let mut out = out;
                 while out.len() >= channels {

@@ -295,3 +295,150 @@ fn the_meter_leaves_out_the_metronome() {
     assert!(peaks(&played)[0] > 0.0, "a click sounds");
     assert_eq!(transport.take_peaks(), [0.0; 2]);
 }
+
+/// Zero channels fills silence without panicking or advancing the playhead.
+#[test]
+fn zero_channels_is_silent_and_does_not_advance() {
+    let (publisher, transport, mut engine) = engine();
+    publisher.publish(Score::new(&project(60), RATE));
+    transport.play();
+    play(&mut engine, 100, 100);
+    let _ = transport.take_peaks();
+    assert_eq!(transport.position(), 100);
+
+    let mut out = vec![1.0; 16];
+    engine.fill(&mut out, 0);
+    assert!(out.iter().all(|&sample| sample == 0.0));
+    assert_eq!(transport.position(), 100);
+    assert_eq!(transport.take_peaks(), [0.0; 2]);
+
+    engine.fill(&mut [], 0);
+    assert_eq!(transport.position(), 100);
+}
+
+/// A loop of a few frames wraps many times within a single block and equals
+/// the offline render of those frames repeated.
+#[test]
+fn a_very_short_loop_wraps_many_times_within_one_block() {
+    let project = project(60);
+    // At 120 BPM and 8000 Hz, 1 tick is about 4 frames.
+    let score = Score::new(&project, RATE).looped(10..11);
+    let looped = score.looped_frames().unwrap();
+    let length = (looped.end - looped.start) as usize;
+    assert!(
+        (2..=8).contains(&length),
+        "expected a few frames, got {looped:?}"
+    );
+    let whole = render(&project, RATE, looped.end as usize);
+    let start = looped.start as usize;
+    let end = looped.end as usize;
+
+    let frames = 200;
+    let mut expected = Vec::with_capacity(frames);
+    let prefix = 2usize;
+    expected.extend_from_slice(&whole[start - prefix..end]);
+    while expected.len() < frames {
+        expected.extend_from_slice(&whole[start..end]);
+    }
+    expected.truncate(frames);
+
+    let (publisher, transport, mut engine) = engine();
+    publisher.publish(score);
+    transport.seek(looped.start - prefix as u64);
+    transport.play();
+    let played = play(&mut engine, frames, frames);
+    assert_eq!(bits(&played), bits(&expected));
+    let into_loop = (frames - prefix) % length;
+    assert_eq!(transport.position(), looped.start + into_loop as u64);
+}
+
+/// Samples at the end of a buffer that do not make a whole frame are zeroed,
+/// and the playhead advances only by whole frames.
+#[test]
+fn trailing_samples_short_of_a_frame_are_zeroed() {
+    let project = project(60);
+    let whole = render(&project, RATE, 20);
+    let (publisher, transport, mut engine) = engine();
+    publisher.publish(Score::new(&project, RATE));
+    transport.play();
+
+    // 5 stereo frames + 1 trailing sample.
+    let mut out = vec![1.0; 11];
+    engine.fill(&mut out, 2);
+    let expected: Vec<f32> = whole[..5].iter().flatten().copied().collect();
+    assert_eq!(
+        out[..10].iter().map(|s| s.to_bits()).collect::<Vec<_>>(),
+        expected.iter().map(|s| s.to_bits()).collect::<Vec<_>>()
+    );
+    assert_eq!(out[10], 0.0);
+    assert_eq!(transport.position(), 5);
+
+    // 3 four-channel frames + 3 trailing samples.
+    let mut out = vec![1.0; 15];
+    engine.fill(&mut out, 4);
+    assert_eq!(out[12..], [0.0, 0.0, 0.0]);
+    assert_eq!(transport.position(), 8);
+
+    // Shorter than a single frame: everything zeroed, playhead unchanged.
+    let mut out = vec![1.0; 3];
+    engine.fill(&mut out, 4);
+    assert_eq!(out, [0.0, 0.0, 0.0]);
+    assert_eq!(transport.position(), 8);
+}
+
+/// The meter across a loop boundary equals the peaks of the frames actually
+/// played on both sides of the wrap.
+#[test]
+fn the_meter_measures_peaks_across_a_loop_boundary() {
+    let mut history = History::default();
+    for command in [
+        Command::AddTrack,
+        Command::AddTrack,
+        Command::SetTrackPan { track: 0, pan: 0 },
+        Command::SetTrackPan { track: 1, pan: 200 },
+        Command::AddClip {
+            track: 0,
+            start: 0,
+            length: 4 * PPQ,
+        },
+        Command::AddClip {
+            track: 1,
+            start: 0,
+            length: 4 * PPQ,
+        },
+        // Track 0 (hard left) sounds just before the loop end (frames 10000..12000).
+        Command::AddNote {
+            id: 0,
+            start: 2 * PPQ + PPQ / 2,
+            length: PPQ / 2,
+            pitch: 60,
+            velocity: 100,
+        },
+        // Track 1 (hard right) sounds right at the loop start (frames 4000..6000).
+        Command::AddNote {
+            id: 1,
+            start: PPQ,
+            length: PPQ / 2,
+            pitch: 67,
+            velocity: 80,
+        },
+    ] {
+        history.edit(Edit::Apply(command)).unwrap();
+    }
+    let project = history.present().clone();
+    let score = Score::new(&project, RATE).looped(PPQ..3 * PPQ);
+    assert_eq!(score.looped_frames(), Some(4000..12_000));
+
+    let (publisher, transport, mut engine) = engine();
+    publisher.publish(score);
+    transport.seek(11_000);
+    transport.play();
+    // Single block crossing the loop end (11000..12000 then 4000..5000).
+    let played = play(&mut engine, 2000, 2000);
+    let expected_peaks = peaks(&played);
+    assert!(
+        expected_peaks[0] > 0.0 && expected_peaks[1] > 0.0,
+        "both sides of the loop boundary contribute: {expected_peaks:?}"
+    );
+    assert_eq!(transport.take_peaks(), expected_peaks);
+}

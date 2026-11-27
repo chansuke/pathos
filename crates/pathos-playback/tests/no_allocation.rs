@@ -11,6 +11,7 @@ use std::sync::Arc;
 use pathos_core::{Command, Edit, History, PPQ};
 use pathos_playback::engine::{Engine, Transport};
 use pathos_playback::handoff::handoff;
+use pathos_playback::output::{buffer_len, fill_device};
 use pathos_render::Score;
 
 thread_local! {
@@ -89,9 +90,39 @@ fn filling_blocks_neither_allocates_nor_frees() {
     let (publisher, player) = handoff();
     let transport = Arc::new(Transport::default());
     let mut engine = Engine::new(player, transport.clone());
-    let mut out = vec![0.0; 10_000 * 2];
-    transport.play();
+    let mut out_mono = vec![0.0; 10_000];
+    let mut out_stereo = vec![0.0; 10_000 * 2];
+    let mut out_quad = vec![0.0; 10_000 * 4];
 
+    // Before any score is published, both stopped and playing.
+    for playing in [false, true] {
+        if playing {
+            transport.play();
+        } else {
+            transport.stop();
+        }
+        let made = allocations(|| {
+            engine.fill(&mut out_mono[..256], 0);
+            engine.fill(&mut out_mono, 1);
+            engine.fill(&mut out_stereo, 2);
+            engine.fill(&mut out_quad, 4);
+        });
+        assert_eq!(made, 0, "no score published, playing={playing}");
+    }
+
+    // Stopped with a published score.
+    publisher.publish(Score::new(history.present(), rate));
+    publisher.collect();
+    transport.stop();
+    let made = allocations(|| {
+        engine.fill(&mut out_mono[..256], 0);
+        engine.fill(&mut out_mono, 1);
+        engine.fill(&mut out_stereo, 2);
+        engine.fill(&mut out_quad, 4);
+    });
+    assert_eq!(made, 0, "stopped with score");
+
+    transport.play();
     for edit in 0..4 {
         // The last score loops a beat, which the blocks below cross, and
         // clicks on the beats.
@@ -105,11 +136,42 @@ fn filling_blocks_neither_allocates_nor_frees() {
         publisher.publish(score);
         publisher.collect();
         transport.seek(edit * 1000);
-        // Taking a new score, rendering in parts and retiring the old score.
+        // Taking a new score, rendering in parts and retiring the old score,
+        // across 0, 1, 2 and 4 channels.
         let made = allocations(|| {
-            engine.fill(&mut out, 2);
-            engine.fill(&mut out[..256], 2);
+            engine.fill(&mut out_mono[..256], 0);
+            engine.fill(&mut out_mono, 1);
+            engine.fill(&mut out_mono[..256], 1);
+            engine.fill(&mut out_stereo, 2);
+            engine.fill(&mut out_stereo[..256], 2);
+            engine.fill(&mut out_quad, 4);
+            engine.fill(&mut out_quad[..256], 4);
         });
         assert_eq!(made, 0, "edit {edit}");
+    }
+
+    // Device format conversion callback path (output::fill_device).
+    for channels in [0, 1, 2, 4] {
+        let mut scratch = vec![0.0; buffer_len(channels)];
+        let len = 10_000 * channels.max(1);
+        let mut f32_out = vec![0.0f32; len];
+        let mut i16_out = vec![0i16; len];
+        let mut i32_out = vec![0i32; len];
+        let mut u16_out = vec![0u16; len];
+        let made = allocations(|| {
+            fill_device(&mut f32_out, &mut scratch, channels, |s, ch| {
+                engine.fill(s, ch);
+            });
+            fill_device(&mut i16_out, &mut scratch, channels, |s, ch| {
+                engine.fill(s, ch);
+            });
+            fill_device(&mut i32_out, &mut scratch, channels, |s, ch| {
+                engine.fill(s, ch);
+            });
+            fill_device(&mut u16_out, &mut scratch, channels, |s, ch| {
+                engine.fill(s, ch);
+            });
+        });
+        assert_eq!(made, 0, "fill_device channels={channels}");
     }
 }
