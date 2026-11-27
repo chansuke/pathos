@@ -1,4 +1,5 @@
 mod agent;
+mod controller;
 mod editor;
 mod file;
 mod layout;
@@ -17,13 +18,12 @@ use gpui::{
     ScrollWheelEvent, Task, TitlebarOptions, Window, WindowBounds, WindowOptions, div, prelude::*,
     px, rgb, rgba, size,
 };
-use pathos_agent::{Listener, Proposals};
-use pathos_core::{CENTER_PAN, Clip, Document, PPQ, Project, Tick, UNITY_VOLUME};
+use pathos_agent::Listener;
+use pathos_core::{CENTER_PAN, Clip, PPQ, Project, Tick, UNITY_VOLUME};
 use pathos_playback::output::Output;
-use pathos_render::Score;
 
-use editor::{Editor, Input, Key};
-use file::Saved;
+use controller::{Action, Controller, Notice};
+use editor::{Editor, Input};
 use layout::{
     BEAT_WIDTH, FOOTER_HEIGHT, Fader, HEADER_WIDTH, HIGHEST_PITCH, KEYBOARD_WIDTH, LANE_HEIGHT,
     LOWEST_PITCH, ROLL_BEAT_WIDTH, ROLL_RULER_HEIGHT, ROW_HEIGHT, RULER_HEIGHT, Rect, TIMELINE_TOP,
@@ -46,52 +46,31 @@ const KEYS: [(&str, &str); 9] = [
     ("Ctrl O", "open"),
 ];
 
-/// The outcome of the last save or open, shown until the next accepted edit.
-enum Notice {
-    Saved(PathBuf),
-    Failed(String),
-}
-
 struct Pathos {
-    editor: Editor,
+    controller: Controller,
     focus: FocusHandle,
     /// The audio device, or why it could not be opened. Editing works
     /// without one.
     output: Result<Output, String>,
-    saved: Saved,
-    notice: Option<Notice>,
     /// The window title last set, so that it is set only when it changes.
     title: String,
     /// Whether the window is asking to save before it closes.
     asking_to_close: bool,
-    /// The ticks that playback repeats, if any (ADR 22).
-    looping: Option<Range<Tick>>,
-    /// Whether playback clicks on every beat (ADR 23).
-    metronome: bool,
     meter: Meter,
     /// When the meter last took the peaks of the audio thread.
     metered: Option<Instant>,
-    /// What agents proposed through the socket (ADR 35).
-    proposals: Proposals,
 }
 
 impl Pathos {
     fn handle(&mut self, input: Input, cx: &mut Context<Self>) {
-        let heard = self.editor.pending();
-        if self.editor.handle(input) {
-            self.notice = None;
-            self.publish();
-        } else if self.editor.pending() != heard {
-            // A dragged volume or pan changed, or was let go without an edit.
+        if self.controller.handle(input) {
             self.publish();
         }
         cx.notify();
     }
 
-    /// Starts editing `document`, stored in `path`, from the beginning.
-    fn replace(&mut self, document: Document, path: PathBuf) {
-        self.saved = Saved::new(Some(path), &document);
-        self.editor = Editor::new(document);
+    /// Stops playback, rewinds to the start and publishes the open project.
+    fn reset_transport_and_publish(&self) {
         if let Ok(output) = &self.output {
             output.transport().stop();
             output.transport().seek(0);
@@ -102,18 +81,18 @@ impl Pathos {
     /// Saves to the document's file, or asks for one when it has none or when
     /// `choose` is set. The task tells whether the document was saved.
     fn save(&mut self, choose: bool, cx: &mut Context<Self>) -> Task<bool> {
-        if let (Some(path), false) = (self.saved.path(), choose) {
+        if let (Some(path), false) = (self.controller.saved.path(), choose) {
             return Task::ready(self.save_to(path.to_path_buf()));
         }
         let name = format!("untitled.{}", file::EXTENSION);
-        let prompt = cx.prompt_for_new_path(&self.saved.directory(), Some(&name));
+        let prompt = cx.prompt_for_new_path(&self.controller.saved.directory(), Some(&name));
         cx.spawn(async move |this, cx| {
             let answer = prompt.await;
             this.update(cx, |this, cx| {
                 let saved = match answer {
                     Ok(Ok(Some(path))) => this.save_to(path),
                     Ok(Err(error)) => {
-                        this.notice =
+                        this.controller.notice =
                             Some(Notice::Failed(format!("cannot ask for a file: {error}")));
                         false
                     }
@@ -127,29 +106,20 @@ impl Pathos {
     }
 
     fn save_to(&mut self, path: PathBuf) -> bool {
-        let saved = self.saved.save(path.clone(), self.editor.document());
-        self.notice = Some(match &saved {
-            Ok(()) => Notice::Saved(path),
-            Err(error) => Notice::Failed(format!("cannot save {}: {error}", path.display())),
-        });
-        saved.is_ok()
+        self.controller.save_to(path)
     }
 
     /// Whether the window may close now. With unsaved changes it asks first,
     /// and closes the window itself once they are saved or discarded.
     fn may_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if !self.saved.modified(self.editor.document()) {
+        if !self.controller.needs_close_confirmation() {
             return true;
         }
         if self.asking_to_close {
             return false;
         }
         self.asking_to_close = true;
-        let name = self
-            .saved
-            .path()
-            .and_then(|path| path.file_name())
-            .map_or("untitled".into(), |name| name.to_string_lossy());
+        let name = self.controller.document_name();
         let answer = window.prompt(
             PromptLevel::Warning,
             &format!("Save the changes to {name}?"),
@@ -177,10 +147,7 @@ impl Pathos {
 
     /// Asks for a file and opens it, unless there are unsaved changes.
     fn open(&mut self, cx: &mut Context<Self>) {
-        if self.saved.modified(self.editor.document()) {
-            self.notice = Some(Notice::Failed(
-                "there are unsaved changes; save them first".into(),
-            ));
+        if !self.controller.can_open() {
             return;
         }
         let prompt = cx.prompt_for_paths(PathPromptOptions {
@@ -199,7 +166,7 @@ impl Pathos {
                         }
                     }
                     Ok(Err(error)) => {
-                        this.notice =
+                        this.controller.notice =
                             Some(Notice::Failed(format!("cannot ask for a file: {error}")))
                     }
                     Ok(Ok(None)) | Err(_) => {}
@@ -212,60 +179,22 @@ impl Pathos {
     }
 
     fn open_path(&mut self, path: PathBuf) {
-        match file::open(&path) {
-            Ok(document) => self.replace(document, path),
-            Err(error) => {
-                self.notice = Some(Notice::Failed(format!(
-                    "cannot open {}: {error}",
-                    path.display()
-                )))
-            }
+        if self.controller.open_path(path) {
+            self.reset_transport_and_publish();
         }
-    }
-
-    fn handle_file(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
-        let modifiers = &event.keystroke.modifiers;
-        if !modifiers.secondary() {
-            return false;
-        }
-        match event.keystroke.key.as_str() {
-            "s" => self.save(modifiers.shift, cx).detach(),
-            "o" => self.open(cx),
-            _ => return false,
-        }
-        cx.notify();
-        true
     }
 
     /// Applies the proposal the window shows (ADR 35).
     fn apply_proposal(&mut self, cx: &mut Context<Self>) {
-        if self.editor.apply_proposal(&mut self.proposals) {
-            self.notice = None;
+        if self.controller.apply_proposal() {
             self.publish();
         }
         cx.notify();
     }
 
     fn dismiss_proposal(&mut self, cx: &mut Context<Self>) {
-        self.proposals.dismiss(self.editor.document());
+        self.controller.dismiss_proposal();
         cx.notify();
-    }
-
-    /// `Enter` applies the proposal the window shows and `Escape` dismisses
-    /// it.
-    fn handle_proposal(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
-        let modifiers = &event.keystroke.modifiers;
-        if modifiers.secondary() || self.proposals.shown(self.editor.document()).is_none() {
-            return false;
-        }
-        match event.keystroke.key.as_str() {
-            "enter" => self.apply_proposal(cx),
-            // A finding without commands is only dismissed; apply_proposal
-            // leaves it as it is.
-            "escape" => self.dismiss_proposal(cx),
-            _ => return false,
-        }
-        true
     }
 
     /// Answers the requests of agents on the socket until the window goes.
@@ -273,9 +202,7 @@ impl Pathos {
         cx.spawn(async move |this, cx| {
             while let Some(call) = listener.next().await {
                 let answered = this.update(cx, |this, cx| {
-                    let response = this
-                        .proposals
-                        .handle(this.editor.document(), call.request.clone());
+                    let response = this.controller.handle_request(call.request.clone());
                     call.reply(response);
                     cx.notify();
                 });
@@ -290,31 +217,20 @@ impl Pathos {
     /// Hands the project as it should sound now to the audio thread (ADR 18).
     fn publish(&self) {
         if let Ok(output) = &self.output {
-            let (heard, rate) = (self.editor.heard(), output.sample_rate());
-            let mut score = Score::new(&heard, rate);
-            if let Some(ticks) = &self.looping {
-                score = score.looped(ticks.clone());
-            }
-            if self.metronome {
-                score = score.with_metronome();
-            }
-            output.publish(score);
+            output.publish(self.controller.score(output.sample_rate()));
         }
     }
 
     /// Loops the selected clip, or every clip, and stops looping when a loop
     /// is on (ADR 22).
     fn toggle_loop(&mut self, cx: &mut Context<Self>) {
-        self.looping = match self.looping {
-            Some(_) => None,
-            None => editor::loop_range(self.editor.history().present(), self.editor.selected()),
-        };
+        self.controller.toggle_loop();
         self.publish();
         cx.notify();
     }
 
     fn toggle_metronome(&mut self, cx: &mut Context<Self>) {
-        self.metronome = !self.metronome;
+        self.controller.toggle_metronome();
         self.publish();
         cx.notify();
     }
@@ -338,31 +254,16 @@ impl Pathos {
         }
     }
 
-    fn handle_transport(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
-        match event.keystroke.key.as_str() {
-            "space" => self.play_or_stop(cx),
-            "home" => self.rewind(cx),
-            _ => return false,
-        }
-        true
-    }
-
     /// The bar at the top: the file, the transport, the readout, the loop and
     /// metronome toggles, the master volume and the meter (ADR 27).
     fn top_bar(&self, width: f32, tick: Tick, frame: u64, cx: &mut Context<Self>) -> Vec<Div> {
-        let project = self.editor.history().present();
+        let project = self.controller.editor.history().present();
         let playing = self
             .output
             .as_ref()
             .is_ok_and(|output| output.transport().is_playing());
-        let name = self
-            .saved
-            .path()
-            .and_then(|path| path.file_name())
-            .map_or("untitled".into(), |name| {
-                name.to_string_lossy().into_owned()
-            });
-        let modified = self.saved.modified(self.editor.document());
+        let name = self.controller.document_name();
+        let modified = self.controller.needs_close_confirmation();
         let time = match &self.output {
             Ok(output) => readout::time_label(frame, output.sample_rate()),
             Err(_) => "-:--.---".into(),
@@ -456,7 +357,7 @@ impl Pathos {
                 layout::loop_button_rect(),
                 "Loop",
                 "L",
-                self.looping.is_some(),
+                self.controller.looping.is_some(),
             )
             .on_mouse_down(
                 MouseButton::Left,
@@ -469,7 +370,7 @@ impl Pathos {
                 layout::metronome_button_rect(),
                 "Metronome",
                 "K",
-                self.metronome,
+                self.controller.metronome,
             )
             .on_mouse_down(
                 MouseButton::Left,
@@ -500,7 +401,9 @@ impl Pathos {
                 .border_color(rgb(GRID))
                 .bg(rgb(CONTROL))
                 .font_family(MONO)
-                .child(editor::volume_label(self.editor.volume(Fader::Master))),
+                .child(editor::volume_label(
+                    self.controller.editor.volume(Fader::Master),
+                )),
         );
         elements.extend(meter_view(width, &self.meter));
         elements
@@ -579,11 +482,6 @@ fn meter_view(width: f32, meter: &Meter) -> Vec<Div> {
     let at_level = |level: f32| left.width * meter::fraction(level);
     let (high, full) = (at_level(decibels(-6.0)), at_level(1.0));
     let mut elements = Vec::new();
-    let zones = [
-        (high, METER_LOW),
-        (full, METER_HIGH),
-        (f32::INFINITY, ERROR),
-    ];
     let channels = meter.levels().into_iter().zip(meter.holds());
     for (channel, (level, hold)) in channels.enumerate() {
         let rect = layout::meter_rect(width, channel);
@@ -610,12 +508,11 @@ fn meter_view(width: f32, meter: &Meter) -> Vec<Div> {
         );
         // The held peak, in the color of its zone (ADR 30).
         if let Some(mark) = layout::hold_rect(width, channel, meter::fraction(hold)) {
-            let held = mark.x - rect.x;
-            // Past the last zone, which ends at infinity, is only a NaN.
-            let color = zones
-                .into_iter()
-                .find(|&(to, _)| held < to)
-                .map_or(ERROR, |(_, color)| color);
+            let color = match meter::zone(hold) {
+                meter::Zone::Low => METER_LOW,
+                meter::Zone::High => METER_HIGH,
+                meter::Zone::Clip => ERROR,
+            };
             elements.push(at(mark).bg(rgb(color)));
         }
     }
@@ -790,23 +687,20 @@ fn footer(status: Option<(String, bool)>, width: f32, height: f32) -> Div {
 
 impl Render for Pathos {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let title = self.saved.title(self.editor.document());
+        let title = self
+            .controller
+            .saved
+            .title(self.controller.editor.document());
         if title != self.title {
             window.set_window_title(&title);
             self.title = title;
         }
         let width = f32::from(window.viewport_size().width);
         let height = f32::from(window.viewport_size().height);
-        self.editor.resize(width, height);
-        let status = match (self.editor.rejected(), &self.notice, &self.output) {
-            (Some(error), _, _) => Some((error.to_string(), true)),
-            (None, Some(Notice::Saved(path)), _) => {
-                Some((format!("Saved {}", path.display()), false))
-            }
-            (None, Some(Notice::Failed(error)), _) => Some((error.clone(), true)),
-            (None, None, Err(error)) => Some((format!("No audio output: {error}"), true)),
-            (None, None, Ok(_)) => None,
-        };
+        self.controller.editor.resize(width, height);
+        let status = self
+            .controller
+            .status(self.output.as_ref().err().map(String::as_str));
         if let Ok(output) = &self.output {
             let now = clock();
             let elapsed = self.metered.map_or(Duration::ZERO, |then| now - then);
@@ -817,8 +711,8 @@ impl Render for Pathos {
                 window.request_animation_frame();
             }
         }
-        let project = self.editor.history().present();
-        let selected = self.editor.selected();
+        let project = self.controller.editor.history().present();
+        let selected = self.controller.editor.selected();
         let (tick, frame, playhead) = match &self.output {
             Ok(output) => {
                 output.collect();
@@ -834,12 +728,19 @@ impl Render for Pathos {
             Err(_) => (0, 0, None),
         };
         let top_bar = self.top_bar(width, tick, frame, cx);
-        let pending = self.proposals.pending(self.editor.document());
-        let shown = self.proposals.shown(self.editor.document()).cloned();
+        let pending = self
+            .controller
+            .proposals
+            .pending(self.controller.editor.document());
+        let shown = self
+            .controller
+            .proposals
+            .shown(self.controller.editor.document())
+            .cloned();
         let anchor = shown.as_ref().and_then(|proposal| proposal.anchor);
         let proposal = shown.map(|proposal| agent::proposal_card(&proposal, pending, width, cx));
-        let project = self.editor.history().present();
-        let view = self.editor.view();
+        let project = self.controller.editor.history().present();
+        let view = self.controller.editor.view();
         let shown = layout::lanes_rect(&view, selected.is_some());
 
         div()
@@ -850,23 +751,30 @@ impl Render for Pathos {
             .text_xs()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                if this.handle_proposal(event, cx)
-                    || this.handle_file(event, cx)
-                    || this.handle_transport(event, cx)
-                {
-                    return;
-                }
                 let modifiers = &event.keystroke.modifiers;
-                if event.keystroke.key == "l" && !modifiers.secondary() {
-                    this.toggle_loop(cx);
+                let Some(action) = this.controller.route_key(
+                    event.keystroke.key.as_str(),
+                    modifiers.secondary(),
+                    modifiers.shift,
+                ) else {
                     return;
-                }
-                if event.keystroke.key == "k" && !modifiers.secondary() {
-                    this.toggle_metronome(cx);
-                    return;
-                }
-                if let Some(key) = key(event) {
-                    this.handle(Input::Key(key), cx);
+                };
+                match action {
+                    Action::ApplyProposal => this.apply_proposal(cx),
+                    Action::DismissProposal => this.dismiss_proposal(cx),
+                    Action::Save { choose } => {
+                        this.save(choose, cx).detach();
+                        cx.notify();
+                    }
+                    Action::Open => {
+                        this.open(cx);
+                        cx.notify();
+                    }
+                    Action::PlayOrStop => this.play_or_stop(cx),
+                    Action::Rewind => this.rewind(cx),
+                    Action::ToggleLoop => this.toggle_loop(cx),
+                    Action::ToggleMetronome => this.toggle_metronome(cx),
+                    Action::Editor(key) => this.handle(Input::Key(key), cx),
                 }
             }))
             .on_mouse_down(
@@ -885,10 +793,10 @@ impl Render for Pathos {
             )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
                 let (x, y) = (f32::from(event.position.x), f32::from(event.position.y));
-                if this.editor.pending().is_some() {
+                if this.controller.editor.pending().is_some() {
                     this.handle(Input::Move { x, y }, cx);
                 } else {
-                    this.editor.handle(Input::Move { x, y });
+                    this.controller.editor.handle(Input::Move { x, y });
                 }
             }))
             .on_mouse_up(
@@ -903,16 +811,21 @@ impl Render for Pathos {
                 // A line of a wheel is a third of a lane, so a notch of three
                 // lines scrolls one lane.
                 let delta = event.delta.pixel_delta(px(LANE_HEIGHT / 3.0));
-                if this.editor.scroll(x, y, -f32::from(delta.y)) {
+                if this.controller.editor.scroll(x, y, -f32::from(delta.y)) {
                     cx.notify();
                 }
             }))
             .children(top_bar)
-            .children(ruler(project, self.looping.as_ref(), playhead, width))
+            .children(ruler(
+                project,
+                self.controller.looping.as_ref(),
+                playhead,
+                width,
+            ))
             .child(scrolled(
                 shown,
                 view.scroll,
-                lanes(&self.editor, width)
+                lanes(&self.controller.editor, width)
                     .into_iter()
                     .chain(
                         project
@@ -921,7 +834,8 @@ impl Render for Pathos {
                             .map(|clip| clip_view(project, clip, Some(clip.id) == selected)),
                     )
                     .chain(
-                        self.looping
+                        self.controller
+                            .looping
                             .as_ref()
                             .map(|ticks| at(layout::loop_rect(project, ticks)).bg(rgba(LOOP))),
                     )
@@ -1353,20 +1267,6 @@ fn at(rect: Rect) -> Div {
         .h(px(rect.height))
 }
 
-fn key(event: &KeyDownEvent) -> Option<Key> {
-    let modifiers = &event.keystroke.modifiers;
-    match event.keystroke.key.as_str() {
-        "z" if modifiers.secondary() && modifiers.shift => Some(Key::Redo),
-        "z" if modifiers.secondary() => Some(Key::Undo),
-        "y" if modifiers.secondary() => Some(Key::Redo),
-        _ if modifiers.secondary() => None,
-        "t" => Some(Key::AddTrack),
-        "s" => Some(Key::SplitClip),
-        "delete" | "backspace" => Some(Key::DeleteClip),
-        _ => None,
-    }
-}
-
 /// The time of a frame. Only the window reads the clock, and passes the
 /// elapsed time to the meter (clippy.toml).
 #[expect(
@@ -1419,18 +1319,13 @@ fn main() {
                         eprintln!("no audio output: {error}");
                     }
                     let mut pathos = Pathos {
-                        editor: Editor::default(),
+                        controller: Controller::default(),
                         focus,
                         output,
-                        saved: Saved::default(),
-                        notice: None,
                         title: String::new(),
                         asking_to_close: false,
-                        looping: None,
-                        metronome: false,
                         meter: Meter::default(),
                         metered: None,
-                        proposals: Proposals::default(),
                     };
                     let socket = socket_path();
                     match Listener::bind(&socket) {
@@ -1441,12 +1336,10 @@ fn main() {
                     }
                     // A file named on the command line is opened, or created
                     // by the first save if it does not exist yet.
-                    if let Some(path) = std::env::args_os().nth(1).map(PathBuf::from) {
-                        if path.exists() {
-                            pathos.open_path(path);
-                        } else {
-                            pathos.saved = Saved::new(Some(path), pathos.editor.document());
-                        }
+                    if let Some(path) = std::env::args_os().nth(1).map(PathBuf::from)
+                        && pathos.controller.open_cli_path(path)
+                    {
+                        pathos.reset_transport_and_publish();
                     }
                     pathos
                 })
