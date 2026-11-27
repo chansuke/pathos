@@ -289,12 +289,17 @@ mod tests {
         );
         for line in [
             "",
+            "   ",
+            "\t",
             "add-clip 0 +1 2",
             "add-clip 0 -1 2",
             "add-clip 0 1",
             "add-clip\t0 1 2",
+            "add-track\t",
             "Add-track",
             "undo 1",
+            "micros 0",
+            "schedule 48000",
             "add-clip 0 0 18446744073709551616",
         ] {
             assert_eq!(line.parse::<Edit>(), Err(UnrecognizedEdit), "{line:?}");

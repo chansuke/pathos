@@ -9,14 +9,14 @@
     reason = "helpers outside #[test] functions fail the test by panicking"
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command as Process, Stdio};
+use std::process::{Command as Process, Output, Stdio};
 
 use pathos_core::{
-    CENTER_PAN, Command, Document, Edit, EditError, Event, History, MAX_PAN, MAX_PITCH, MAX_TICK,
-    MAX_US_PER_QUARTER, MAX_VELOCITY, MAX_VOLUME, UNITY_VOLUME,
+    CENTER_PAN, Command, Document, Edit, EditError, Event, History, LoadError, MAX_PAN, MAX_PITCH,
+    MAX_TICK, MAX_US_PER_QUARTER, MAX_VELOCITY, MAX_VOLUME, UNITY_VOLUME, UnrecognizedEdit,
 };
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
@@ -76,11 +76,18 @@ errors! {
     NothingToRedo => "nothing-to-redo",
 }
 
-/// Each error explains itself to the user, which the model does not specify.
+/// Each error explains itself to the user with a non-empty, distinct message,
+/// which the model does not specify.
 #[test]
 fn every_error_has_a_message() {
+    let mut seen = BTreeSet::new();
     for &error in ERRORS {
-        assert!(!error.to_string().is_empty(), "{error:?}");
+        let message = error.to_string();
+        assert!(!message.trim().is_empty(), "{error:?}");
+        assert!(
+            seen.insert(message.clone()),
+            "duplicate error message for {error:?}: {message:?}"
+        );
     }
 }
 
@@ -237,12 +244,13 @@ fn model_replies(trace: &[Request]) -> Vec<String> {
     model_replies_to(&input)
 }
 
-/// The replies of the Lean model to lines in its trace format.
-fn model_replies_to(input: &str) -> Vec<String> {
+/// Runs the Lean model on lines in its trace format and returns its raw output.
+fn run_model(input: &str) -> Output {
     let path = model_path();
     let mut model = Process::new(&path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .unwrap_or_else(|error| {
             panic!(
@@ -256,8 +264,17 @@ fn model_replies_to(input: &str) -> Vec<String> {
         .unwrap()
         .write_all(input.as_bytes())
         .unwrap();
-    let output = model.wait_with_output().unwrap();
-    assert!(output.status.success(), "the model rejected the trace");
+    model.wait_with_output().unwrap()
+}
+
+/// The replies of the Lean model to lines in its trace format.
+fn model_replies_to(input: &str) -> Vec<String> {
+    let output = run_model(input);
+    assert!(
+        output.status.success(),
+        "the model rejected the trace: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     String::from_utf8(output.stdout)
         .unwrap()
         .lines()
@@ -342,11 +359,9 @@ fn velocity() -> impl Strategy<Value = u64> {
 fn volume() -> impl Strategy<Value = u64> {
     let max = u64::from(MAX_VOLUME);
     prop_oneof![
-        8 => 0..=max,
-        2 => prop_oneof![
-            Just(0),
-            Just(u64::from(UNITY_VOLUME)),
-            Just(max),
+        6 => 0..=max,
+        1 => prop_oneof![Just(0), Just(u64::from(UNITY_VOLUME)), Just(max)],
+        3 => prop_oneof![
             Just(max + 1),
             Just(u64::from(u16::MAX) + 1),
             Just(u64::MAX),
@@ -358,11 +373,9 @@ fn volume() -> impl Strategy<Value = u64> {
 fn pan() -> impl Strategy<Value = u64> {
     let max = u64::from(MAX_PAN);
     prop_oneof![
-        8 => 0..=max,
-        2 => prop_oneof![
-            Just(0),
-            Just(u64::from(CENTER_PAN)),
-            Just(max),
+        6 => 0..=max,
+        1 => prop_oneof![Just(0), Just(u64::from(CENTER_PAN)), Just(max)],
+        3 => prop_oneof![
             Just(max + 1),
             Just(u64::from(u8::MAX) + 1),
             Just(u64::MAX),
@@ -386,7 +399,7 @@ fn command() -> impl Strategy<Value = Command> {
             .prop_map(|(id, track, start)| Command::MoveClip { id, track, start }),
         5 => (id.clone(), tick()).prop_map(|(id, tick)| Command::SplitClip { id, tick }),
         2 => id.prop_map(|id| Command::DeleteClip { id }),
-        3 => (tick(), us_per_quarter())
+        4 => (tick(), us_per_quarter())
             .prop_map(|(tick, us_per_quarter)| Command::SetTempo { tick, us_per_quarter }),
         5 => tick().prop_map(|tick| Command::RemoveTempo { tick }),
         3 => (note_clip.clone(), note_start(), note_length(), pitch(), velocity()).prop_map(
@@ -400,14 +413,14 @@ fn command() -> impl Strategy<Value = Command> {
         ),
         2 => (note_clip, note_start(), pitch())
             .prop_map(|(id, start, pitch)| Command::RemoveNote { id, start, pitch }),
-        2 => (track.clone(), volume())
+        3 => (track.clone(), volume())
             .prop_map(|(track, volume)| Command::SetTrackVolume { track, volume }),
         2 => (track.clone(), any::<bool>())
             .prop_map(|(track, muted)| Command::SetTrackMute { track, muted }),
         2 => (track.clone(), any::<bool>())
             .prop_map(|(track, solo)| Command::SetTrackSolo { track, solo }),
-        2 => (track, pan()).prop_map(|(track, pan)| Command::SetTrackPan { track, pan }),
-        1 => volume().prop_map(|volume| Command::SetMasterVolume { volume }),
+        3 => (track, pan()).prop_map(|(track, pan)| Command::SetTrackPan { track, pan }),
+        2 => volume().prop_map(|volume| Command::SetMasterVolume { volume }),
     ]
 }
 
@@ -450,22 +463,18 @@ fn sample_rate() -> impl Strategy<Value = u64> {
     ]
 }
 
-/// A few notes added to one clip, then the schedule. Most schedules of a
-/// trace are otherwise empty, which leaves the order of events barely tested.
+/// A few notes added across clips (and tracks), then the schedule. Most
+/// schedules of a trace are otherwise empty, which leaves multi-clip and
+/// multi-track ordering barely tested.
 fn notes_then_schedule() -> impl Strategy<Value = Vec<Request>> {
-    let note = (note_start(), note_length(), pitch(), velocity());
+    let note = (0u64..4, note_start(), note_length(), pitch(), velocity());
     // A track to mute, or to solo when the flag is set.
     let silence = prop::option::of((0u64..3, any::<bool>()));
-    (
-        0u64..2,
-        prop::collection::vec(note, 1..6),
-        silence,
-        sample_rate(),
-    )
-        .prop_map(|(id, notes, silence, rate)| {
+    (prop::collection::vec(note, 1..6), silence, sample_rate()).prop_map(
+        |(notes, silence, rate)| {
             let mut requests: Vec<Request> = notes
                 .into_iter()
-                .map(|(start, length, pitch, velocity)| {
+                .map(|(id, start, length, pitch, velocity)| {
                     Request::Edit(Edit::Apply(Command::AddNote {
                         id,
                         start,
@@ -487,7 +496,95 @@ fn notes_then_schedule() -> impl Strategy<Value = Vec<Request>> {
             }
             requests.push(Request::Schedule(rate));
             requests
-        })
+        },
+    )
+}
+
+/// Notes added to an existing clip followed by splitting it. Splitting a clip
+/// with notes is left out of the Kani harnesses (ADR 16), so this chunk keeps
+/// both note redistribution and shortening of crossing notes heavily exercised.
+fn notes_then_split() -> impl Strategy<Value = Vec<Request>> {
+    let note = (
+        (0u64..3).prop_map(|step| step * (GRID / 2)),
+        (2u64..6).prop_map(|step| step * (GRID / 2)),
+        60u64..64,
+        1u64..=u64::from(MAX_VELOCITY),
+    );
+    let split_tick = (1u64..32).prop_map(|step| step * (GRID / 2));
+    (0u64..2, prop::collection::vec(note, 2..5), split_tick).prop_map(|(id, notes, tick)| {
+        let mut requests: Vec<Request> = notes
+            .into_iter()
+            .map(|(start, length, pitch, velocity)| {
+                Request::Edit(Edit::Apply(Command::AddNote {
+                    id,
+                    start,
+                    length,
+                    pitch,
+                    velocity,
+                }))
+            })
+            .collect();
+        requests.push(Request::Edit(Edit::Apply(Command::SplitClip { id, tick })));
+        requests
+    })
+}
+
+/// Move-clip attempts targeting overlap, out-of-range, and unknown-track rules
+/// on existing clips.
+fn move_clip_scenario() -> impl Strategy<Value = Vec<Request>> {
+    let grid_tick = (0u64..16).prop_map(|step| step * GRID);
+    let grid_len = (1u64..6).prop_map(|step| step * GRID);
+    let out_of_range = prop_oneof![
+        Just(MAX_TICK - 1),
+        Just(MAX_TICK),
+        Just(MAX_TICK + 1),
+        Just(u64::MAX),
+    ];
+    let unknown_track = prop_oneof![3u64..6, Just(100), Just(u64::MAX)];
+    prop_oneof![
+        // Place another clip at (track, start), then move clip `id` onto it.
+        (0u64..3, 0u64..3, grid_tick.clone(), grid_len).prop_map(|(id, track, start, length)| {
+            vec![
+                Request::Edit(Edit::Apply(Command::AddClip {
+                    track,
+                    start,
+                    length,
+                })),
+                Request::Edit(Edit::Apply(Command::MoveClip { id, track, start })),
+            ]
+        }),
+        // Move an existing clip past MAX_TICK.
+        (0u64..3, 0u64..3, out_of_range).prop_map(|(id, track, start)| {
+            vec![Request::Edit(Edit::Apply(Command::MoveClip {
+                id,
+                track,
+                start,
+            }))]
+        }),
+        // Move an existing clip to a non-existent track.
+        (0u64..3, unknown_track, grid_tick).prop_map(|(id, track, start)| {
+            vec![Request::Edit(Edit::Apply(Command::MoveClip {
+                id,
+                track,
+                start,
+            }))]
+        }),
+    ]
+}
+
+/// A tempo change at a non-zero tick followed by its removal, so `remove-tempo`
+/// frequently names an existing change.
+fn tempo_pair() -> impl Strategy<Value = Vec<Request>> {
+    ((1u64..16).prop_map(|step| step * GRID), 1u64..2_000_000).prop_map(|(tick, us_per_quarter)| {
+        vec![
+            Request::Edit(Edit::Apply(Command::SetTempo {
+                tick,
+                us_per_quarter,
+            })),
+            Request::Micros(tick),
+            Request::Edit(Edit::Apply(Command::RemoveTempo { tick })),
+        ]
+    })
 }
 
 fn request() -> impl Strategy<Value = Request> {
@@ -515,11 +612,14 @@ fn cases() -> u32 {
 
 fn trace() -> impl Strategy<Value = Vec<Request>> {
     let chunk = prop_oneof![
-        12 => request().prop_map(|request| vec![request]),
-        1 => note_pair(),
+        14 => request().prop_map(|request| vec![request]),
+        2 => note_pair(),
         1 => notes_then_schedule(),
+        3 => notes_then_split(),
+        2 => move_clip_scenario(),
+        1 => tempo_pair(),
     ];
-    prop::collection::vec(chunk, 1..100).prop_map(|chunks| chunks.concat())
+    prop::collection::vec(chunk, 1..90).prop_map(|chunks| chunks.concat())
 }
 
 proptest! {
@@ -966,6 +1066,45 @@ const COVERAGE_TRACES: u32 = 2000;
 /// that rule.
 const MIN_HITS: u32 = 100;
 
+/// Every `(request_kind, error)` pair that `Project::apply` or `History::edit`
+/// can return. Each must reach [`MIN_HITS`] on its own, rather than sharing a
+/// total across commands.
+const REACHABLE_ERRORS: &[(&str, EditError)] = &[
+    ("add-clip", EditError::EmptyClip),
+    ("add-clip", EditError::UnknownTrack),
+    ("add-clip", EditError::OutOfRange),
+    ("add-clip", EditError::Overlap),
+    ("move-clip", EditError::UnknownClip),
+    ("move-clip", EditError::UnknownTrack),
+    ("move-clip", EditError::OutOfRange),
+    ("move-clip", EditError::Overlap),
+    ("split-clip", EditError::UnknownClip),
+    ("split-clip", EditError::SplitOutsideClip),
+    ("delete-clip", EditError::UnknownClip),
+    ("set-tempo", EditError::InvalidTempo),
+    ("set-tempo", EditError::OutOfRange),
+    ("remove-tempo", EditError::InitialTempo),
+    ("remove-tempo", EditError::NoTempoChange),
+    ("add-note", EditError::UnknownClip),
+    ("add-note", EditError::EmptyNote),
+    ("add-note", EditError::InvalidNote),
+    ("add-note", EditError::NoteOutsideClip),
+    ("add-note", EditError::NoteOverlap),
+    ("remove-note", EditError::UnknownClip),
+    ("remove-note", EditError::UnknownNote),
+    ("set-track-volume", EditError::UnknownTrack),
+    ("set-track-volume", EditError::InvalidVolume),
+    ("mute-track", EditError::UnknownTrack),
+    ("unmute-track", EditError::UnknownTrack),
+    ("solo-track", EditError::UnknownTrack),
+    ("unsolo-track", EditError::UnknownTrack),
+    ("set-track-pan", EditError::UnknownTrack),
+    ("set-track-pan", EditError::InvalidPan),
+    ("set-master-volume", EditError::InvalidVolume),
+    ("undo", EditError::NothingToUndo),
+    ("redo", EditError::NothingToRedo),
+];
+
 /// How often the generated traces reach each rule. The traces come from a
 /// fixed seed, so the counts change only when the generators or the rules do.
 /// Run with `--nocapture` to print the counts as a Markdown table.
@@ -973,10 +1112,51 @@ const MIN_HITS: u32 = 100;
 fn generators_reach_every_rule() {
     let mut runner = TestRunner::deterministic();
     let mut hits: BTreeMap<(String, String), u32> = BTreeMap::new();
+    let mut split_clip_with_notes: u32 = 0;
+    let mut split_clip_crossing_note: u32 = 0;
     for _ in 0..COVERAGE_TRACES {
         let trace = trace().new_tree(&mut runner).unwrap().current();
-        for (request, reply) in trace.iter().zip(core_replies(&trace)) {
-            let outcome = reply.strip_prefix("err ").unwrap_or("ok");
+        let mut history = History::default();
+        for request in &trace {
+            let outcome = match *request {
+                Request::Micros(_) | Request::Schedule(_) => "ok",
+                Request::Edit(edit) => {
+                    let split_note_info = match edit {
+                        Edit::Apply(Command::SplitClip { id, tick }) => {
+                            let project = history.present();
+                            project
+                                .clips()
+                                .iter()
+                                .find(|clip| clip.id == id)
+                                .map(|clip| {
+                                    let has_notes = project.notes(id).next().is_some();
+                                    let crosses = tick > clip.start
+                                        && tick < clip.stop()
+                                        && project.notes(id).any(|note| {
+                                            let offset = tick - clip.start;
+                                            note.start < offset && note.stop() > offset
+                                        });
+                                    (has_notes, crosses)
+                                })
+                        }
+                        _ => None,
+                    };
+                    match history.edit(edit) {
+                        Ok(()) => {
+                            if let Some((has_notes, crosses)) = split_note_info {
+                                if has_notes {
+                                    split_clip_with_notes += 1;
+                                }
+                                if crosses {
+                                    split_clip_crossing_note += 1;
+                                }
+                            }
+                            "ok"
+                        }
+                        Err(error) => error_name(error),
+                    }
+                }
+            };
             *hits
                 .entry((request.kind().into(), outcome.into()))
                 .or_default() += 1;
@@ -988,28 +1168,198 @@ fn generators_reach_every_rule() {
     for ((kind, outcome), count) in &hits {
         println!("| {kind} | {outcome} | {count} |");
     }
+    println!("| split-clip | ok (with notes) | {split_clip_with_notes} |");
+    println!("| split-clip | ok (crossing note) | {split_clip_crossing_note} |");
 
-    let total = |matches: &dyn Fn(&str, &str) -> bool| -> u32 {
-        hits.iter()
-            .filter(|((kind, outcome), _)| matches(kind, outcome))
-            .map(|(_, count)| count)
-            .sum()
-    };
-    let errors = ERRORS.iter().map(|&error| {
+    let expected_errors: BTreeSet<(&str, &str)> = REACHABLE_ERRORS
+        .iter()
+        .map(|&(kind, error)| (kind, error_name(error)))
+        .collect();
+    for &error in ERRORS {
         let name = error_name(error);
-        let count = total(&|_, outcome| outcome == name);
-        (name.to_owned(), count)
+        assert!(
+            expected_errors.iter().any(|&(_, err)| err == name),
+            "REACHABLE_ERRORS is missing error {name}"
+        );
+    }
+    for (kind, outcome) in hits.keys() {
+        if outcome != "ok" {
+            assert!(
+                expected_errors.contains(&(kind.as_str(), outcome.as_str())),
+                "observed error pair ({kind}, {outcome}) missing from REACHABLE_ERRORS"
+            );
+        }
+    }
+
+    let lookup = |kind: &str, outcome: &str| -> u32 {
+        hits.get(&(kind.to_owned(), outcome.to_owned()))
+            .copied()
+            .unwrap_or(0)
+    };
+    let errors = REACHABLE_ERRORS.iter().map(|&(kind, error)| {
+        let name = error_name(error);
+        (format!("{kind} {name}"), lookup(kind, name))
     });
-    let successes = REQUEST_KINDS.iter().map(|&kind| {
-        let count = total(&|k, outcome| k == kind && outcome == "ok");
-        (format!("{kind} ok"), count)
-    });
+    let successes = REQUEST_KINDS
+        .iter()
+        .map(|&kind| (format!("{kind} ok"), lookup(kind, "ok")));
+    let special = [
+        (
+            "split-clip ok (with notes)".to_owned(),
+            split_clip_with_notes,
+        ),
+        (
+            "split-clip ok (crossing note)".to_owned(),
+            split_clip_crossing_note,
+        ),
+    ];
     let rare: Vec<_> = errors
         .chain(successes)
+        .chain(special)
         .filter(|(_, count)| *count < MIN_HITS)
         .collect();
     assert!(
         rare.is_empty(),
         "rules reached fewer than {MIN_HITS} times in {COVERAGE_TRACES} traces: {rare:?}"
     );
+}
+
+/// Rust `Edit::from_str` / `Document::load` and Lean `Request.parse` agree on
+/// edge and malformed inputs, and diverge only where the project file format
+/// intentionally narrows the trace format (query lines and `u64` range).
+#[test]
+fn parser_agrees_with_model_on_edge_inputs() {
+    // 1. Valid lines with extra/leading/trailing ASCII whitespace, CRLF, and
+    //    leading zeros are accepted identically by `Document::load` and the model.
+    let valid_files = [
+        "  add-track  \n",
+        "\tadd-track\t\r\n  add-clip   00   000   0240  \r\n",
+        "add-track\nadd-clip 0 0 960\n  add-note  0   0  240  060  100 \nundo\nredo\n",
+    ];
+    for file in valid_files {
+        let document = Document::load(file).unwrap();
+        let replies = model_replies_to(file);
+        assert_eq!(replies.len(), file.lines().count(), "{file:?}");
+        assert!(
+            replies.iter().all(|reply| reply.starts_with("ok ")),
+            "{file:?}: {replies:?}"
+        );
+        assert_eq!(
+            replies.last().unwrap(),
+            &format!("ok {}", render(document.history())),
+            "{file:?}"
+        );
+    }
+
+    // 2. Malformed lines rejected by `Edit::from_str`, `Document::load`, and
+    //    Lean `Request.parse` alike.
+    let invalid_lines = [
+        "",
+        "   ",
+        "\t",
+        "\r",
+        "add-clip\t0 1 2",
+        "add-clip 0\t1 2",
+        "add-track\t1",
+        "add-clip 0 +1 2",
+        "add-clip 0 -1 2",
+        "add-clip 0 ０ 240",
+        "add-clip 0 1",
+        "add-clip 0 1 2 3",
+        "add-track 1",
+        "undo 1",
+        "redo 0",
+        "set-tempo 0",
+        "add-note 0 0 1 60",
+        "Add-track",
+        "UNDO",
+        "unknown",
+        "# comment",
+        "// comment",
+    ];
+    for line in invalid_lines {
+        assert_eq!(line.parse::<Edit>(), Err(UnrecognizedEdit), "{line:?}");
+        let file = format!("{line}\n");
+        assert_eq!(
+            Document::load(&file),
+            Err(LoadError::Unrecognized { line: 1 }),
+            "{line:?}"
+        );
+        let output = run_model(&file);
+        assert!(
+            !output.status.success(),
+            "model unexpectedly accepted {line:?}: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+
+    // Trailing tab is trimmed by both `Document::load` and `Main.lean`, while
+    // `Edit::from_str` alone only splits on spaces.
+    assert_eq!("add-track\t".parse::<Edit>(), Err(UnrecognizedEdit));
+    let tab_doc = Document::load("add-track\t\n").unwrap();
+    let tab_replies = model_replies_to("add-track\t\n");
+    assert_eq!(
+        tab_replies,
+        vec![format!("ok {}", render(tab_doc.history()))]
+    );
+
+    // 3. Query requests (`micros` / `schedule`) are part of the trace format
+    //    but are not project edits.
+    for (line, expected_reply) in [("micros 0", "micros 0"), ("schedule 48000", "schedule ")] {
+        assert_eq!(line.parse::<Edit>(), Err(UnrecognizedEdit), "{line:?}");
+        let file = format!("{line}\n");
+        assert_eq!(
+            Document::load(&file),
+            Err(LoadError::Unrecognized { line: 1 }),
+            "{line:?}"
+        );
+        assert_eq!(model_replies_to(&file), vec![expected_reply], "{line:?}");
+    }
+
+    // 4. Inputs Lean's `String.toNat?` accepts that Rust's strict ASCII-digit
+    //    `u64` parser rejects: numbers beyond `u64::MAX` (`18446744073709551616`)
+    //    and underscore digit separators (`1_000`).
+    for (line, expected_err) in [
+        ("add-clip 0 0 18446744073709551616", "err unknown-track"),
+        (
+            "set-master-volume 18446744073709551616",
+            "err invalid-volume",
+        ),
+        ("set-tempo 18446744073709551616 500000", "err out-of-range"),
+        ("add-clip 0 1_000 240", "err unknown-track"),
+    ] {
+        assert_eq!(line.parse::<Edit>(), Err(UnrecognizedEdit), "{line:?}");
+        let file = format!("{line}\n");
+        assert_eq!(
+            Document::load(&file),
+            Err(LoadError::Unrecognized { line: 1 }),
+            "{line:?}"
+        );
+        assert_eq!(model_replies_to(&file), vec![expected_err], "{line:?}");
+    }
+
+    // 5. Syntactically valid edits that fail semantically agree on the error.
+    for (line, expected) in [
+        ("undo", EditError::NothingToUndo),
+        ("redo", EditError::NothingToRedo),
+        ("delete-clip 0", EditError::UnknownClip),
+        ("add-clip 0 0 0", EditError::EmptyClip),
+        ("set-master-volume 2001", EditError::InvalidVolume),
+    ] {
+        assert!(line.parse::<Edit>().is_ok(), "{line:?}");
+        let file = format!("{line}\n");
+        assert_eq!(
+            Document::load(&file),
+            Err(LoadError::Rejected {
+                line: 1,
+                error: expected
+            }),
+            "{line:?}"
+        );
+        assert_eq!(
+            model_replies_to(&file),
+            vec![format!("err {}", error_name(expected))],
+            "{line:?}"
+        );
+    }
 }

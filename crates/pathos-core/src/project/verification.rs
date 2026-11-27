@@ -514,3 +514,29 @@ fn tick_to_micros_does_not_overflow() {
     );
     project.tick_to_micros(tick);
 }
+
+/// `TempoMap::sample_of` neither overflows nor panics for any sample rate and
+/// any tick up to a beat past [`MAX_TICK`].
+#[kani::proof]
+#[kani::unwind(4)]
+#[kani::solver(minisat)]
+fn sample_of_does_not_overflow() {
+    let tempo: [TempoChange; 2] = kani::any();
+    let project = Project {
+        track_count: 0,
+        mixed: Vec::new(),
+        master_volume: UNITY_VOLUME,
+        tempo: tempo.to_vec(),
+        clips: Vec::new(),
+        notes: Vec::new(),
+    };
+    kani::assume(well_formed(&project, 0));
+    let tick: Tick = kani::any();
+    kani::assume(tick <= MAX_TICK + PPQ);
+    let rate: u64 = kani::any();
+    kani::cover!(
+        tick > project.tempo[1].tick && rate > 0,
+        "the tick lies past the second tempo change at a nonzero rate"
+    );
+    project.tempo_map().sample_of(rate, tick);
+}
