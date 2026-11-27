@@ -365,7 +365,8 @@ pub fn playhead_x(project: &Project, sample_rate: NonZeroU32, frame: u64) -> f32
 /// The last tick that starts at or before frame `frame` at `sample_rate`.
 pub fn tick_at(project: &Project, sample_rate: NonZeroU32, frame: u64) -> Tick {
     let tempo = project.tempo_map();
-    let at = |tick: Tick| tempo.micros(tick) * u128::from(sample_rate.get()) / 1_000_000;
+    let rate = u64::from(sample_rate.get());
+    let at = |tick: Tick| tempo.sample_of(rate, tick);
     let (mut low, mut high) = (0, MAX_TICK);
     while low < high {
         let middle = low + (high - low).div_ceil(2);
@@ -981,5 +982,70 @@ mod tests {
             hit(&project, &VIEW, None, HEADER_WIDTH, roll_top(WINDOW_HEIGHT)),
             Hit::Nothing
         );
+    }
+
+    #[test]
+    fn tick_at_agrees_with_sample_of_at_44_1_khz_fractional_ticks() {
+        let project = Project::default();
+        let rate = NonZeroU32::new(44_100).unwrap();
+        let tempo = project.tempo_map();
+
+        // ADR 32: at 44.1 kHz and 120 BPM, tick 15 is 344.53125 -> 345,
+        // tick 16 is 367.5 -> 368 (half rounded up), tick 17 is 390.46875 -> 390.
+        assert_eq!(tempo.sample_of(44_100, 15), 345);
+        assert_eq!(tempo.sample_of(44_100, 16), 368);
+        assert_eq!(tempo.sample_of(44_100, 17), 390);
+
+        assert_eq!(tick_at(&project, rate, 344), 14);
+        assert_eq!(tick_at(&project, rate, 345), 15);
+        assert_eq!(tick_at(&project, rate, 367), 15);
+        assert_eq!(tick_at(&project, rate, 368), 16);
+        assert_eq!(tick_at(&project, rate, 389), 16);
+        assert_eq!(tick_at(&project, rate, 390), 17);
+    }
+
+    #[test]
+    fn tick_at_agrees_with_sample_of_across_tempo_changes() {
+        let mut history = History::default();
+        // Tempos from ADR 32 (~82.07 BPM and ~116.05 BPM) on non-beat ticks.
+        history
+            .edit(Edit::Apply(Command::SetTempo {
+                tick: 0,
+                us_per_quarter: 731_083,
+            }))
+            .unwrap();
+        history
+            .edit(Edit::Apply(Command::SetTempo {
+                tick: 517,
+                us_per_quarter: 517_018,
+            }))
+            .unwrap();
+        let project = history.present();
+        let tempo = project.tempo_map();
+
+        for hz in [44_100_u32, 48_000_u32] {
+            let rate = NonZeroU32::new(hz).unwrap();
+            let rate_u64 = u64::from(hz);
+            for tick in [0, 1, 15, 16, 17, 516, 517, 518, 960, 1921, 3840] {
+                let sample = tempo.sample_of(rate_u64, tick) as u64;
+                let found = tick_at(project, rate, sample);
+                assert!(
+                    found >= tick,
+                    "hz={hz} tick={tick} sample={sample} found={found}"
+                );
+                assert!(tempo.sample_of(rate_u64, found) <= u128::from(sample));
+                assert!(tempo.sample_of(rate_u64, found + 1) > u128::from(sample));
+                if sample > 0
+                    && tick > 0
+                    && tempo.sample_of(rate_u64, tick - 1) < u128::from(sample)
+                {
+                    assert_eq!(
+                        tick_at(project, rate, sample - 1),
+                        tick - 1,
+                        "hz={hz} tick={tick} sample={sample}"
+                    );
+                }
+            }
+        }
     }
 }
