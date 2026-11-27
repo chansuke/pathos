@@ -245,13 +245,14 @@ proptest! {
         let frames = 4 * rate.get() as usize;
         let centered = mono(&project(&[a]), rate, frames);
         let pan = |pan| render(&with(project(&[a]), Command::SetTrackPan { track: 0, pan }), rate, frames);
-        let (left, right, quarter) = (pan(0), pan(200), pan(150));
+        let (left, right, left_quarter, right_quarter) = (pan(0), pan(200), pan(50), pan(150));
         for frame in 0..frames {
             let at = centered[frame].to_bits();
             prop_assert_eq!(left[frame].map(f32::to_bits), [at, 0], "frame {}", frame);
             prop_assert_eq!(right[frame].map(f32::to_bits), [0, at], "frame {}", frame);
             let half = (centered[frame] * 0.5).to_bits();
-            prop_assert_eq!(quarter[frame].map(f32::to_bits), [half, at], "frame {}", frame);
+            prop_assert_eq!(left_quarter[frame].map(f32::to_bits), [at, half], "frame {}", frame);
+            prop_assert_eq!(right_quarter[frame].map(f32::to_bits), [half, at], "frame {}", frame);
         }
     }
 
@@ -631,4 +632,691 @@ fn the_master_volume_leaves_the_metronome_alone() {
     };
     let silent = with(project(&[]), Command::SetMasterVolume { volume: 0 });
     assert_eq!(clicks(&silent), clicks(&project(&[])));
+}
+
+/// The frames from the note-on of each note up to its note-off, together with
+/// the track that owns the note.
+fn spans_with_tracks(project: &Project, rate: NonZeroU32) -> Vec<(u64, usize, usize)> {
+    let mut on = std::collections::BTreeMap::new();
+    let mut spans = Vec::new();
+    for event in project.schedule(rate.get().into()) {
+        match event {
+            Event::On {
+                sample,
+                track,
+                pitch,
+                ..
+            } => {
+                on.insert((track, pitch), sample as usize);
+            }
+            Event::Off {
+                sample,
+                track,
+                pitch,
+            } => spans.push((track, on.remove(&(track, pitch)).unwrap(), sample as usize)),
+        }
+    }
+    spans
+}
+
+#[derive(Clone, Debug)]
+struct RichNote {
+    start: u64,
+    length: u64,
+    pitch: u64,
+    velocity: u64,
+}
+
+#[derive(Clone, Debug)]
+struct RichClip {
+    gap: u64,
+    length: u64,
+    notes: Vec<RichNote>,
+}
+
+#[derive(Clone, Debug)]
+struct RichTrack {
+    volume: u64,
+    pan: u64,
+    clips: Vec<RichClip>,
+}
+
+#[derive(Clone, Debug)]
+struct TempoSpec {
+    tick: u64,
+    us_per_quarter: u64,
+}
+
+#[derive(Clone, Debug)]
+struct RichProjectSpec {
+    tempos: Vec<TempoSpec>,
+    tracks: Vec<RichTrack>,
+    master_volume: u64,
+}
+
+fn volume_strategy() -> impl Strategy<Value = u64> {
+    prop_oneof![
+        1 => Just(0u64),
+        3 => 1u64..1000,
+        1 => Just(1000u64),
+        3 => 1001u64..=2000,
+    ]
+}
+
+fn pan_strategy() -> impl Strategy<Value = u64> {
+    prop_oneof![
+        1 => Just(0u64),
+        3 => 1u64..100,
+        1 => Just(100u64),
+        3 => 101u64..200,
+        1 => Just(200u64),
+    ]
+}
+
+fn tempo_spec() -> impl Strategy<Value = TempoSpec> {
+    (
+        prop_oneof![1 => Just(0u64), 3 => 1u64..3 * PPQ],
+        200_000u64..=1_000_000,
+    )
+        .prop_map(|(tick, us_per_quarter)| TempoSpec {
+            tick,
+            us_per_quarter,
+        })
+}
+
+fn rich_note() -> impl Strategy<Value = RichNote> {
+    (0u64..PPQ, 1u64..=PPQ, 0u64..128, 1u64..128).prop_map(|(start, length, pitch, velocity)| {
+        RichNote {
+            start,
+            length,
+            pitch,
+            velocity,
+        }
+    })
+}
+
+fn rich_clip() -> impl Strategy<Value = RichClip> {
+    (
+        prop_oneof![1 => Just(0u64), 3 => 1u64..PPQ / 3],
+        120u64..=2 * PPQ / 3,
+        prop::collection::vec(rich_note(), 1..=4),
+    )
+        .prop_map(|(gap, length, notes)| RichClip { gap, length, notes })
+}
+
+fn rich_track() -> impl Strategy<Value = RichTrack> {
+    (
+        volume_strategy(),
+        pan_strategy(),
+        prop::collection::vec(rich_clip(), 1..=3),
+    )
+        .prop_map(|(volume, pan, clips)| RichTrack { volume, pan, clips })
+}
+
+fn rich_project_spec() -> impl Strategy<Value = RichProjectSpec> {
+    (
+        prop::collection::vec(tempo_spec(), 1..=4),
+        prop::collection::vec(rich_track(), 1..=3),
+        volume_strategy(),
+    )
+        .prop_map(|(tempos, tracks, master_volume)| RichProjectSpec {
+            tempos,
+            tracks,
+            master_volume,
+        })
+}
+
+fn add_track_clips(history: &mut History, track: u64, clips: &[RichClip], next_clip_id: &mut u64) {
+    let mut cursor = 0u64;
+    for clip in clips {
+        let start = cursor + clip.gap;
+        let clip_id = *next_clip_id;
+        *next_clip_id += 1;
+        history
+            .edit(Edit::Apply(Command::AddClip {
+                track,
+                start,
+                length: clip.length,
+            }))
+            .unwrap();
+        for note in &clip.notes {
+            let note_start = note.start % clip.length;
+            let max_len = clip.length - note_start;
+            let note_length = note.length.min(max_len).max(1);
+            let _ = history.edit(Edit::Apply(Command::AddNote {
+                id: clip_id,
+                start: note_start,
+                length: note_length,
+                pitch: note.pitch,
+                velocity: note.velocity,
+            }));
+        }
+        cursor = start + clip.length;
+    }
+}
+
+fn build_rich_project(spec: &RichProjectSpec) -> Project {
+    let mut history = History::default();
+    for tempo in &spec.tempos {
+        history
+            .edit(Edit::Apply(Command::SetTempo {
+                tick: tempo.tick,
+                us_per_quarter: tempo.us_per_quarter,
+            }))
+            .unwrap();
+    }
+    history
+        .edit(Edit::Apply(Command::SetMasterVolume {
+            volume: spec.master_volume,
+        }))
+        .unwrap();
+    let mut next_clip_id = 0u64;
+    for (index, track) in spec.tracks.iter().enumerate() {
+        let track_id = index as u64;
+        history.edit(Edit::Apply(Command::AddTrack)).unwrap();
+        history
+            .edit(Edit::Apply(Command::SetTrackVolume {
+                track: track_id,
+                volume: track.volume,
+            }))
+            .unwrap();
+        history
+            .edit(Edit::Apply(Command::SetTrackPan {
+                track: track_id,
+                pan: track.pan,
+            }))
+            .unwrap();
+        add_track_clips(&mut history, track_id, &track.clips, &mut next_clip_id);
+    }
+    history.present().clone()
+}
+
+/// Builds a centered, unity-volume single-track project containing only track
+/// `track_index` of `spec`, sharing the same tempo map.
+fn build_single_track_unity(spec: &RichProjectSpec, track_index: usize) -> Project {
+    let mut history = History::default();
+    for tempo in &spec.tempos {
+        history
+            .edit(Edit::Apply(Command::SetTempo {
+                tick: tempo.tick,
+                us_per_quarter: tempo.us_per_quarter,
+            }))
+            .unwrap();
+    }
+    history.edit(Edit::Apply(Command::AddTrack)).unwrap();
+    let mut next_clip_id = 0u64;
+    add_track_clips(
+        &mut history,
+        0,
+        &spec.tracks[track_index].clips,
+        &mut next_clip_id,
+    );
+    history.present().clone()
+}
+
+/// Expected frame length covering all scheduled spans plus a silent tail.
+fn render_len(spans: &[(usize, usize)], rate: NonZeroU32) -> usize {
+    spans.iter().map(|&(_, off)| off).max().unwrap_or(0) + (rate.get() as usize / 4).max(16)
+}
+
+/// The 5 ms linear attack/release envelope at `frame` for a note on `on..off`.
+fn expected_envelope(frame: usize, on: usize, off: usize, rate: NonZeroU32) -> f32 {
+    let ramp = (rate.get() / 200).max(1) as f32;
+    ((frame - on + 1) as f32 / ramp)
+        .min((off - frame) as f32 / ramp)
+        .min(1.0)
+}
+
+fn common_rate() -> impl Strategy<Value = NonZeroU32> {
+    prop_oneof![
+        Just(8_000),
+        Just(22_050),
+        Just(44_100),
+        Just(48_000),
+        Just(96_000),
+        1u32..8_000,
+    ]
+    .prop_map(|rate| NonZeroU32::new(rate).unwrap())
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    /// In a project with tempo changes, multiple clips (including tick > 0),
+    /// arbitrary track volumes/pans and master volume, no frame outside every
+    /// scheduled note span sounds.
+    #[test]
+    fn rich_project_is_silent_where_no_note_sounds(
+        spec in rich_project_spec(),
+        rate in rate(),
+    ) {
+        let project = build_rich_project(&spec);
+        let spans = spans(&project, rate);
+        let frames = render_len(&spans, rate);
+        let out = render(&project, rate, frames);
+        for (frame, &[left, right]) in out.iter().enumerate() {
+            if !spans.iter().any(|&(on, off)| on <= frame && frame < off) {
+                prop_assert_eq!(left.to_bits(), 0.0f32.to_bits(), "left frame {}", frame);
+                prop_assert_eq!(right.to_bits(), 0.0f32.to_bits(), "right frame {}", frame);
+            }
+        }
+    }
+
+    /// The first non-silent frame of a rich project matches the earliest
+    /// scheduled note-on of a track with non-zero volume (when master volume is
+    /// non-zero).
+    #[test]
+    fn rich_project_starts_at_its_scheduled_sample(
+        spec in rich_project_spec(),
+        rate in rate(),
+    ) {
+        let project = build_rich_project(&spec);
+        let tracked = spans_with_tracks(&project, rate);
+        let frames = tracked.iter().map(|&(_, _, off)| off).max().unwrap_or(0)
+            + (rate.get() as usize / 4).max(16);
+        let out = render(&project, rate, frames);
+        let first = out.iter().position(|&[left, right]| left != 0.0 || right != 0.0);
+        let expected = if project.master_volume() == 0 {
+            None
+        } else {
+            tracked
+                .iter()
+                .filter(|&&(track, _, _)| project.track(track).is_some_and(|t| t.volume > 0))
+                .map(|&(_, on, _)| on)
+                .min()
+        };
+        prop_assert_eq!(first, expected);
+    }
+
+    /// Blocks rendered one after another join bit-for-bit into the whole render
+    /// of a rich project with tempo changes, multiple clips, arbitrary gains,
+    /// optional metronome and loop range.
+    #[test]
+    fn rich_project_blocks_join_into_the_render(
+        spec in rich_project_spec(),
+        rate in rate(),
+        sizes in prop::collection::vec(1usize..4096, 1..40),
+        metronome in any::<bool>(),
+        loop_start in 0u64..2 * PPQ,
+        loop_len in 0u64..PPQ,
+    ) {
+        let project = build_rich_project(&spec);
+        let spans = spans(&project, rate);
+        let frames = render_len(&spans, rate);
+        let mut score = Score::new(&project, rate);
+        if metronome {
+            score = score.with_metronome();
+        }
+        let loop_end = loop_start + loop_len;
+        let tempo = project.tempo_map();
+        let expected_start = tempo.sample_of(rate.get().into(), loop_start) as u64;
+        let expected_end = tempo.sample_of(rate.get().into(), loop_end) as u64;
+        let expected_loop = (expected_start < expected_end).then_some(expected_start..expected_end);
+        score = score.looped(loop_start..loop_end);
+        prop_assert_eq!(score.looped_frames(), expected_loop);
+
+        let whole = play(&score, 0, frames);
+        let mut joined = Vec::with_capacity(frames);
+        let mut block = Vec::new();
+        for size in sizes.iter().cycle() {
+            if joined.len() >= frames {
+                break;
+            }
+            block.clear();
+            block.resize((*size).min(frames - joined.len()), [1.0; 2]);
+            score.render(joined.len() as u64, &mut block);
+            joined.extend_from_slice(&block);
+        }
+        let bits = |frames: &[Frame]| {
+            frames
+                .iter()
+                .flatten()
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>()
+        };
+        prop_assert_eq!(bits(&joined), bits(&whole));
+    }
+
+    /// Each channel of a rich project equals the sum of each track's centered
+    /// unity render scaled by `volume / 1000 * pan_factor * master / 1000`.
+    #[test]
+    fn rich_project_level_matches_gains(
+        spec in rich_project_spec(),
+        rate in rate(),
+    ) {
+        let project = build_rich_project(&spec);
+        let spans = spans(&project, rate);
+        let frames = render_len(&spans, rate);
+        let actual = render(&project, rate, frames);
+        let master = f64::from(project.master_volume()) / 1000.0;
+
+        let mut expected_left = vec![0.0_f64; frames];
+        let mut expected_right = vec![0.0_f64; frames];
+        for track_index in 0..spec.tracks.len() {
+            let track = project.track(track_index as u64).unwrap();
+            let vol = f64::from(track.volume) / 1000.0;
+            let left_pan = ((200.0 - f64::from(track.pan)) / 100.0).min(1.0);
+            let right_pan = (f64::from(track.pan) / 100.0).min(1.0);
+            let gain_left = vol * left_pan * master;
+            let gain_right = vol * right_pan * master;
+            let unity = mono(&build_single_track_unity(&spec, track_index), rate, frames);
+            for frame in 0..frames {
+                let sample = f64::from(unity[frame]);
+                expected_left[frame] += sample * gain_left;
+                expected_right[frame] += sample * gain_right;
+            }
+        }
+
+        let tolerance = 1e-5 * (spans.len() as f64).max(1.0);
+        for frame in 0..frames {
+            if project.master_volume() == 0 {
+                prop_assert_eq!(actual[frame].map(f32::to_bits), [0, 0], "frame {}", frame);
+            } else {
+                let err_l = (f64::from(actual[frame][0]) - expected_left[frame]).abs();
+                let err_r = (f64::from(actual[frame][1]) - expected_right[frame]).abs();
+                prop_assert!(
+                    err_l <= tolerance,
+                    "left frame {}: actual {}, expected {}, err {}",
+                    frame,
+                    actual[frame][0],
+                    expected_left[frame],
+                    err_l
+                );
+                prop_assert!(
+                    err_r <= tolerance,
+                    "right frame {}: actual {}, expected {}, err {}",
+                    frame,
+                    actual[frame][1],
+                    expected_right[frame],
+                    err_r
+                );
+            }
+        }
+    }
+
+    /// For a single note with tempo changes, a non-zero clip start, and
+    /// arbitrary volume, pan (including left-side values < 100) and master
+    /// volume, left and right match the centered unity render scaled by the
+    /// expected gains within tight relative floating-point tolerance.
+    #[test]
+    fn single_note_level_matches_gains(
+        tempos in prop::collection::vec(tempo_spec(), 1..=3),
+        clip_start in 1u64..PPQ,
+        note in rich_note(),
+        volume in volume_strategy(),
+        pan in pan_strategy(),
+        master_volume in volume_strategy(),
+        rate in rate(),
+    ) {
+        let clip_length = PPQ;
+        let spec = RichProjectSpec {
+            tempos,
+            tracks: vec![RichTrack {
+                volume,
+                pan,
+                clips: vec![RichClip {
+                    gap: clip_start,
+                    length: clip_length,
+                    notes: vec![note],
+                }],
+            }],
+            master_volume,
+        };
+        let project = build_rich_project(&spec);
+        let spans = spans(&project, rate);
+        let frames = render_len(&spans, rate);
+        let actual = render(&project, rate, frames);
+        let unity = mono(&build_single_track_unity(&spec, 0), rate, frames);
+
+        let vol = volume as f32 / 1000.0;
+        let left_pan = ((200.0 - pan as f32) / 100.0).min(1.0);
+        let right_pan = (pan as f32 / 100.0).min(1.0);
+        let master = master_volume as f32 / 1000.0;
+        let left_gain = vol * left_pan * master;
+        let right_gain = vol * right_pan * master;
+
+        for frame in 0..frames {
+            for (ch, gain) in [(0, left_gain), (1, right_gain)] {
+                let expected = unity[frame] * gain;
+                let got = actual[frame][ch];
+                if expected == 0.0 {
+                    prop_assert_eq!(got.to_bits(), 0.0f32.to_bits(), "ch {} frame {}", ch, frame);
+                } else {
+                    let rel = (got - expected).abs() / expected.abs();
+                    prop_assert!(
+                        rel <= 8.0 * f32::EPSILON,
+                        "ch {} frame {}: got {}, expected {}, rel {}",
+                        ch,
+                        frame,
+                        got,
+                        expected,
+                        rel
+                    );
+                }
+            }
+        }
+    }
+
+    /// At common and low sample rates, a note's magnitude never exceeds
+    /// `level * envelope(frame)`, starts at `level * envelope(on)` on its
+    /// onset frame, follows a monotonic attack/release envelope, and never
+    /// reaches full level when shorter than two ramps minus one frame.
+    #[test]
+    fn envelope_bounds_samples_and_is_monotonic(
+        clip_start in 0u64..PPQ / 2,
+        length in prop_oneof![1u64..30, 30u64..PPQ],
+        pitch in 0u64..128,
+        velocity in 1u64..128,
+        rate in common_rate(),
+    ) {
+        let mut history = History::default();
+        history.edit(Edit::Apply(Command::AddTrack)).unwrap();
+        history
+            .edit(Edit::Apply(Command::AddClip {
+                track: 0,
+                start: clip_start,
+                length,
+            }))
+            .unwrap();
+        history
+            .edit(Edit::Apply(Command::AddNote {
+                id: 0,
+                start: 0,
+                length,
+                pitch,
+                velocity,
+            }))
+            .unwrap();
+        let project = history.present().clone();
+        let spans = spans(&project, rate);
+        let frames = render_len(&spans, rate);
+        let out = mono(&project, rate, frames);
+        let level = velocity as f32 / 127.0;
+        let ramp = (rate.get() / 200).max(1) as usize;
+
+        if let Some(&(on, off)) = spans.first() {
+            let len = off - on;
+            let mid = on + len / 2;
+
+            // At frame == on, phase is 0 so triangle == +1 and sample == level * envelope(on).
+            let onset_env = expected_envelope(on, on, off, rate);
+            prop_assert_eq!(
+                out[on].to_bits(),
+                (level * onset_env).to_bits(),
+                "onset frame {}",
+                on
+            );
+
+            // Envelope is monotonic non-decreasing over attack and non-increasing over release.
+            for frame in on..mid {
+                prop_assert!(
+                    expected_envelope(frame, on, off, rate)
+                        <= expected_envelope(frame + 1, on, off, rate),
+                    "attack monotonicity at frame {}",
+                    frame
+                );
+            }
+            for frame in mid..off - 1 {
+                prop_assert!(
+                    expected_envelope(frame, on, off, rate)
+                        >= expected_envelope(frame + 1, on, off, rate),
+                    "release monotonicity at frame {}",
+                    frame
+                );
+            }
+
+            for (frame, &sample) in out.iter().enumerate() {
+                if on <= frame && frame < off {
+                    let bound = level * expected_envelope(frame, on, off, rate);
+                    prop_assert!(
+                        sample.abs() <= bound,
+                        "frame {}: |{}| > {}",
+                        frame,
+                        sample,
+                        bound
+                    );
+                    if len < 2 * ramp - 1 {
+                        prop_assert!(
+                            sample.abs() < level,
+                            "short note frame {} reached full level: |{}| >= {}",
+                            frame,
+                            sample,
+                            level
+                        );
+                    }
+                } else {
+                    prop_assert_eq!(sample.to_bits(), 0.0f32.to_bits(), "frame {}", frame);
+                }
+            }
+        }
+    }
+}
+
+/// Builds a single-note project with a clip starting at `clip_start` ticks.
+fn single_note_project(clip_start: u64, length: u64, pitch: u64, velocity: u64) -> Project {
+    let mut history = History::default();
+    history.edit(Edit::Apply(Command::AddTrack)).unwrap();
+    history
+        .edit(Edit::Apply(Command::AddClip {
+            track: 0,
+            start: clip_start,
+            length,
+        }))
+        .unwrap();
+    history
+        .edit(Edit::Apply(Command::AddNote {
+            id: 0,
+            start: 0,
+            length,
+            pitch,
+            velocity,
+        }))
+        .unwrap();
+    history.present().clone()
+}
+
+/// At rate 880 Hz, A4 (pitch 69 = 440 Hz) has step 0.5 so the triangle wave is
+/// exactly ±1 on every frame, velocity 127 has level 1, and the 5 ms ramp is
+/// exactly 4 frames: `|sample|` equals the exact linear envelope in quarters.
+#[test]
+fn long_note_envelope_ramps_linearly_over_5_ms() {
+    let rate = NonZeroU32::new(880).unwrap();
+    // Clip starts at half a beat (0.25 s = 220 frames) and lasts 0.1 s (88 frames).
+    let project = single_note_project(480, SECOND / 10, 69, 127);
+    let [(on, off)] = spans(&project, rate).try_into().unwrap();
+    assert_eq!((on, off), (220, 308));
+
+    let out = mono(&project, rate, off + 16);
+    assert!(out[..on].iter().all(|&s| s.to_bits() == 0));
+    assert!(out[off..].iter().all(|&s| s.to_bits() == 0));
+
+    let abs: Vec<f32> = out[on..off].iter().map(|s| s.abs()).collect();
+    assert_eq!(
+        abs[..4].iter().map(|s| s.to_bits()).collect::<Vec<_>>(),
+        [0.25f32, 0.5, 0.75, 1.0].map(f32::to_bits)
+    );
+    assert!(
+        abs[4..abs.len() - 4]
+            .iter()
+            .all(|&s| s.to_bits() == 1.0f32.to_bits())
+    );
+    assert_eq!(
+        abs[abs.len() - 4..]
+            .iter()
+            .map(|s| s.to_bits())
+            .collect::<Vec<_>>(),
+        [1.0f32, 0.75, 0.5, 0.25].map(f32::to_bits)
+    );
+
+    // Also verify the actual attack/sustain/release shape at 48 kHz (ramp = 240 frames)
+    // using a high note (pitch 105, ~3520 Hz) whose peaks rise across 40-frame windows
+    // during the 5 ms attack and fall during the 5 ms release.
+    let hi_rate = NonZeroU32::new(48_000).unwrap();
+    let hi_project = single_note_project(0, SECOND / 10, 105, 127);
+    let [(hi_on, hi_off)] = spans(&hi_project, hi_rate).try_into().unwrap();
+    assert_eq!((hi_on, hi_off), (0, 4_800));
+    let hi_out = mono(&hi_project, hi_rate, hi_off + 64);
+    let window_peak = |range: std::ops::Range<usize>| {
+        hi_out[range]
+            .iter()
+            .fold(0.0_f32, |peak, &s| peak.max(s.abs()))
+    };
+    let attack_peaks: Vec<f32> = (0..6).map(|w| window_peak(w * 40..(w + 1) * 40)).collect();
+    for pair in attack_peaks.windows(2) {
+        assert!(
+            pair[0] < pair[1],
+            "attack peaks should rise: {attack_peaks:?}"
+        );
+    }
+    let sustain_peak = window_peak(240..hi_off - 240);
+    assert!(
+        sustain_peak > 0.99 && sustain_peak <= 1.0,
+        "sustain peak {sustain_peak}"
+    );
+    let release_start = hi_off - 240;
+    let release_peaks: Vec<f32> = (0..6)
+        .map(|w| window_peak(release_start + w * 40..release_start + (w + 1) * 40))
+        .collect();
+    for pair in release_peaks.windows(2) {
+        assert!(
+            pair[0] > pair[1],
+            "release peaks should fall: {release_peaks:?}"
+        );
+    }
+}
+
+/// Notes shorter than 10 ms (shorter than 2 ramps) have a symmetric,
+/// triangle-shaped envelope whose peak stays below 1 when shorter than
+/// `2 * ramp - 1` frames.
+#[test]
+fn short_note_envelope_peaks_below_one_and_is_symmetric() {
+    let rate = NonZeroU32::new(880).unwrap();
+    let cases: &[(u64, &[f32])] = &[
+        (2, &[0.25]),
+        (4, &[0.25, 0.25]),
+        (7, &[0.25, 0.5, 0.25]),
+        (9, &[0.25, 0.5, 0.5, 0.25]),
+        (11, &[0.25, 0.5, 0.75, 0.5, 0.25]),
+        (13, &[0.25, 0.5, 0.75, 0.75, 0.5, 0.25]),
+        (15, &[0.25, 0.5, 0.75, 1.0, 0.75, 0.5, 0.25]),
+    ];
+    for &(ticks, expected) in cases {
+        let project = single_note_project(480, ticks, 69, 127);
+        let [(on, off)] = spans(&project, rate).try_into().unwrap();
+        assert_eq!(off - on, expected.len(), "ticks {ticks}");
+        let out = mono(&project, rate, off + 16);
+        assert!(out[..on].iter().all(|&s| s.to_bits() == 0));
+        assert!(out[off..].iter().all(|&s| s.to_bits() == 0));
+        let got: Vec<u32> = out[on..off].iter().map(|s| s.abs().to_bits()).collect();
+        let want: Vec<u32> = expected.iter().map(|s| s.to_bits()).collect();
+        assert_eq!(got, want, "ticks {ticks} ({} frames)", expected.len());
+        // Symmetric around the center.
+        let reversed: Vec<u32> = got.iter().rev().copied().collect();
+        assert_eq!(got, reversed, "envelope symmetry for ticks {ticks}");
+        // Peak strictly below 1 for notes shorter than 2 * ramp - 1 = 7 frames.
+        if expected.len() < 7 {
+            let peak = out[on..off].iter().fold(0.0_f32, |m, &s| m.max(s.abs()));
+            assert!(peak < 1.0, "peak {peak} for {} frames", expected.len());
+        }
+    }
 }

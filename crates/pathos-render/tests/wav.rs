@@ -76,3 +76,51 @@ fn a_rate_too_high_for_wav_is_refused() {
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     assert!(out.is_empty());
 }
+
+/// The size computation accepts the largest frame count that fits in a 4 GiB
+/// WAV file and refuses every overflow boundary with `InvalidInput`.
+#[test]
+fn wav_sizes_enforce_the_4_gib_limit() {
+    // WAVE tag (4) + fmt chunk (8 + 18) + fact chunk (8 + 4) + data header (8).
+    const HEADER: u32 = 4 + (8 + 18) + (8 + 4) + 8;
+    const BYTES_PER_FRAME: u32 = 8;
+    let max_frames = (u32::MAX - HEADER) / BYTES_PER_FRAME;
+
+    assert_eq!(
+        wav::sizes(0).unwrap(),
+        wav::Sizes {
+            count: 0,
+            data: 0,
+            riff: HEADER,
+        }
+    );
+
+    let max = wav::sizes(u64::from(max_frames)).unwrap();
+    assert_eq!(
+        max,
+        wav::Sizes {
+            count: max_frames,
+            data: max_frames * BYTES_PER_FRAME,
+            riff: max_frames * BYTES_PER_FRAME + HEADER,
+        }
+    );
+    assert!(u32::MAX - max.riff < BYTES_PER_FRAME);
+
+    for too_many in [
+        // `data` fits in u32, `data + HEADER` overflows u32.
+        u64::from(max_frames) + 1,
+        // `count` fits in u32, `count * BYTES_PER_FRAME` overflows u32.
+        u64::from(u32::MAX / BYTES_PER_FRAME) + 1,
+        // `count` itself exceeds u32.
+        u64::from(u32::MAX) + 1,
+        u64::MAX,
+    ] {
+        let error = wav::sizes(too_many).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::InvalidInput,
+            "frames = {too_many}"
+        );
+        assert_eq!(error.to_string(), "a WAV file holds at most 4 GiB");
+    }
+}
