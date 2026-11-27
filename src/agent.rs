@@ -170,4 +170,30 @@ mod tests {
             "Master, bars 2 to 4"
         );
     }
+
+    #[test]
+    fn anchor_label_handles_one_tick_ranges_and_exact_bar_boundaries() {
+        let anchor = |track, start, end| Anchor { track, start, end };
+        // Single-tick ranges at bar start, bar end, and next bar start.
+        assert_eq!(anchor_label(&anchor(Some(0), 0, 1)), "Track 1, bar 1");
+        assert_eq!(
+            anchor_label(&anchor(Some(1), BAR - 1, BAR)),
+            "Track 2, bar 1"
+        );
+        assert_eq!(anchor_label(&anchor(None, BAR, BAR + 1)), "Master, bar 2");
+        // Crossing a bar boundary by one tick spans both bars.
+        assert_eq!(
+            anchor_label(&anchor(Some(0), BAR - 1, BAR + 1)),
+            "Track 1, bars 1 to 2"
+        );
+        // Exact multi-bar range ends inclusively at the last bar covered.
+        assert_eq!(
+            anchor_label(&anchor(None, 0, 2 * BAR)),
+            "Master, bars 1 to 2"
+        );
+        assert_eq!(
+            anchor_label(&anchor(Some(2), BAR, 2 * BAR)),
+            "Track 3, bar 2"
+        );
+    }
 }
