@@ -22,33 +22,34 @@ jobs:
           cmd-format: nix develop -c {0}
           # Pull requests restore the cache that main saves.
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Check formatting
-        run: nix develop -c cargo fmt --all --check
-      - name: Run clippy
-        run: nix develop -c cargo clippy --workspace --all-targets -- -D warnings
-      - name: Check licenses, advisories and sources
-        run: nix develop -c cargo deny check
-      # The editor and the layout are plain Rust, so their tests need no window.
-      - name: Test the app
-        run: nix develop -c cargo test -p pathos
-      # The socket, the proposals and the MCP server need no window (ADR 35).
-      - name: Test the agent interface
-        run: nix develop -c cargo test -p pathos-agent
-      # The measurements for a review render with the deterministic render,
-      # whose own tests run on every platform below (ADR 36).
-      - name: Test the measurements
-        run: nix develop -c cargo test -p pathos-measure
-      # The comparison with REAPER itself runs locally, not here (ADR 34);
-      # the conversion needs no REAPER.
-      - name: Test the conversion to REAPER projects
-        run: nix develop -c cargo test -p pathos-reaper
-      # The loom tests run every interleaving of the snapshot hand-off within
-      # their bound and check the invariants of tla/SnapshotHandoff.tla
-      # (ADR 18).
-      - name: Test the playback hand-off
+      - name: Lint and test
         run: |
-          nix develop -c cargo test -p pathos-playback
-          nix develop -c sh -c 'RUSTFLAGS="$RUSTFLAGS --cfg loom" cargo test -p pathos-playback --release --target-dir target/loom'
+          nix develop -c bash -euo pipefail -c '
+            echo "::group::Check formatting"
+            cargo fmt --all --check
+            echo "::endgroup::"
+
+            echo "::group::Run clippy"
+            cargo clippy --locked --workspace --all-targets -- -D warnings
+            echo "::endgroup::"
+
+            echo "::group::Check licenses, advisories and sources"
+            cargo deny check
+            echo "::endgroup::"
+
+            # Every crate except pathos-core (which runs against the Lean model
+            # in the Spec workflow); the REAPER comparison is ignored (ADR 34).
+            echo "::group::Test workspace crates"
+            cargo test --locked --workspace --exclude pathos-core
+            echo "::endgroup::"
+
+            # The loom tests run every interleaving of the snapshot hand-off
+            # within their bound and check the invariants of
+            # tla/SnapshotHandoff.tla (ADR 18).
+            echo "::group::Test playback hand-off under loom"
+            RUSTFLAGS="${RUSTFLAGS:-} --cfg loom" cargo test --locked -p pathos-playback --release --target-dir target/loom
+            echo "::endgroup::"
+          '
 
   # The render needs no model, so its tests run here rather than with the
   # differential tests. Its hash test fails if a render depends on the platform
@@ -69,4 +70,16 @@ jobs:
           cmd-format: nix develop -c {0}
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Test the render
-        run: nix develop -c cargo test -p pathos-render
+        run: nix develop -c cargo test --locked -p pathos-render
+
+  # Checks that the flake's default package builds (Cargo build flags, runtime
+  # wrappers, and bundled assets).
+  nix-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+      - name: Build the Nix package
+        run: nix build .#default --no-link
