@@ -22,8 +22,8 @@ pub struct Proposal {
     pub changes: Vec<String>,
     /// Where a finding of a review is (ADR 36); a proposal has none.
     pub anchor: Option<Anchor>,
-    /// The number of edits of the document it was made against.
-    base: usize,
+    /// The edits of the document it was made against.
+    base: Vec<Edit>,
 }
 
 /// Why a proposal was refused. Commands are counted from 1.
@@ -179,9 +179,17 @@ impl Proposals {
             commands,
             changes: difference(document.history().present(), history.present()),
             anchor,
-            base: document.edits().len(),
+            base: document.edits().to_vec(),
         });
         Ok(id)
+    }
+
+    /// Marks every pending proposal stale, for example when another project
+    /// replaces the open document.
+    pub fn invalidate(&mut self) {
+        while let Some(proposal) = self.pending.pop_front() {
+            self.decided.insert(proposal.id, Status::Stale);
+        }
     }
 
     pub fn status(&self, id: u64) -> Option<Status> {
@@ -206,7 +214,8 @@ impl Proposals {
     }
 
     /// Applies the shown proposal to `document`. A finding without commands
-    /// has nothing to apply and stays until it is dismissed.
+    /// has nothing to apply and stays until it is dismissed. If any command is
+    /// rejected, `document` is left unchanged and the proposal becomes stale.
     pub fn apply(&mut self, document: &mut Document) -> Result<(), EditError> {
         self.refresh(document);
         if self
@@ -219,14 +228,18 @@ impl Proposals {
         let Some(proposal) = self.pending.pop_front() else {
             return Ok(());
         };
-        // The proposal was checked against this very history, so each
-        // command is accepted; stop at the first that is not all the same.
-        let applied = proposal
+        let mut trial = document.clone();
+        if let Err(error) = proposal
             .commands
             .iter()
-            .try_for_each(|&command| document.edit(Edit::Apply(command)));
+            .try_for_each(|&command| trial.edit(Edit::Apply(command)))
+        {
+            self.decided.insert(proposal.id, Status::Stale);
+            return Err(error);
+        }
+        *document = trial;
         self.decided.insert(proposal.id, Status::Applied);
-        applied
+        Ok(())
     }
 
     pub fn dismiss(&mut self, document: &Document) {
@@ -237,10 +250,10 @@ impl Proposals {
     }
 
     fn refresh(&mut self, document: &Document) {
-        let edits = document.edits().len();
+        let edits = document.edits();
         let decided = &mut self.decided;
         self.pending.retain(|proposal| {
-            let current = proposal.base == edits;
+            let current = proposal.base.as_slice() == edits;
             if !current {
                 decided.insert(proposal.id, Status::Stale);
             }
@@ -475,5 +488,124 @@ mod tests {
             ),
             Response::error("command 1 (\"redo\") is not a command")
         );
+    }
+
+    #[test]
+    fn max_commands_is_accepted_and_error_messages_are_formatted() {
+        let document = document(&[]);
+        let mut proposals = Proposals::default();
+        let id = proposals
+            .propose(
+                &document,
+                "at the limit".into(),
+                &lines(&["add-track"; MAX_COMMANDS]),
+            )
+            .unwrap();
+        assert_eq!(proposals.status(id), Some(Status::Pending));
+        assert_eq!(
+            proposals.shown(&document).unwrap().commands.len(),
+            MAX_COMMANDS
+        );
+        assert_eq!(
+            ProposalError::Empty.to_string(),
+            "a proposal needs at least one command"
+        );
+        assert_eq!(
+            ProposalError::TooLong.to_string(),
+            format!("a proposal may hold at most {MAX_COMMANDS} commands")
+        );
+    }
+
+    #[test]
+    fn handle_accepts_anchored_propose_requests() {
+        let document = document(&["add-track"]);
+        let mut proposals = Proposals::default();
+        let anchor = Anchor {
+            track: Some(0),
+            start: 0,
+            end: 3840,
+        };
+        assert_eq!(
+            proposals.handle(
+                &document,
+                Request::Propose {
+                    summary: "quiet track".into(),
+                    commands: Vec::new(),
+                    anchor: Some(anchor),
+                }
+            ),
+            Response::Proposed { id: 0 }
+        );
+        let shown = proposals.shown(&document).unwrap();
+        assert_eq!(shown.id, 0);
+        assert_eq!(shown.anchor, Some(anchor));
+        assert!(shown.commands.is_empty());
+    }
+
+    #[test]
+    fn a_different_document_with_the_same_edit_count_marks_proposals_stale() {
+        let doc_a = document(&["add-track"]);
+        let mut doc_b = document(&["set-master-volume 500"]);
+        assert_eq!(doc_a.edits().len(), doc_b.edits().len());
+
+        let mut proposals = Proposals::default();
+        let id = proposals
+            .propose(&doc_a, "add a clip".into(), &lines(&["add-clip 0 0 3840"]))
+            .unwrap();
+        assert_eq!(proposals.shown(&doc_b), None);
+        assert_eq!(proposals.status(id), Some(Status::Stale));
+
+        // Even applying directly against doc_b without calling shown first
+        // leaves doc_b untouched and marks the proposal stale.
+        let mut proposals = Proposals::default();
+        let id = proposals
+            .propose(
+                &doc_a,
+                "add track then clip".into(),
+                &lines(&["add-track", "add-clip 1 0 3840"]),
+            )
+            .unwrap();
+        proposals.apply(&mut doc_b).unwrap();
+        assert_eq!(proposals.status(id), Some(Status::Stale));
+        assert_eq!(doc_b.save(), "set-master-volume 500\n");
+    }
+
+    #[test]
+    fn invalidate_marks_every_pending_proposal_stale_even_for_an_identical_document() {
+        let doc = document(&["add-track"]);
+        let mut proposals = Proposals::default();
+        let first = proposals
+            .propose(&doc, "one".into(), &lines(&["add-track"]))
+            .unwrap();
+        let second = proposals
+            .propose(&doc, "two".into(), &lines(&["add-track"]))
+            .unwrap();
+        proposals.invalidate();
+        assert_eq!(proposals.shown(&doc), None);
+        assert_eq!(proposals.pending(&doc), 0);
+        assert_eq!(proposals.status(first), Some(Status::Stale));
+        assert_eq!(proposals.status(second), Some(Status::Stale));
+    }
+
+    #[test]
+    fn a_failed_apply_leaves_the_document_unchanged_and_is_not_marked_applied() {
+        let mut doc = document(&["add-track"]);
+        let before = doc.clone();
+        let mut proposals = Proposals::default();
+        let id = proposals
+            .propose(&doc, "partial".into(), &lines(&["add-track"]))
+            .unwrap();
+        // Inject a failing second command to exercise the atomic rollback path
+        // in apply() directly.
+        proposals.pending[0]
+            .commands
+            .push(Command::DeleteClip { id: 99 });
+
+        let error = proposals.apply(&mut doc).unwrap_err();
+        assert_eq!(error, EditError::UnknownClip);
+        assert_eq!(doc, before);
+        assert_eq!(proposals.status(id), Some(Status::Stale));
+        assert_ne!(proposals.status(id), Some(Status::Applied));
+        assert_eq!(proposals.pending(&doc), 0);
     }
 }

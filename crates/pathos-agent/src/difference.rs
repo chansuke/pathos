@@ -295,4 +295,41 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn it_shows_unmute_solo_unsolo_right_pan_removed_tempo_and_multiple_notes() {
+        let before = project(&[
+            "add-track",
+            "add-track",
+            "mute-track 0",
+            "solo-track 1",
+            "set-tempo 3840 600000",
+        ]);
+        let after = project(&[
+            "add-track",
+            "add-track",
+            "mute-track 0",
+            "solo-track 1",
+            "set-tempo 3840 600000",
+            "unmute-track 0",
+            "solo-track 0",
+            "set-track-pan 0 140",
+            "unsolo-track 1",
+            "remove-tempo 3840",
+            "add-clip 0 0 3840",
+            "add-note 0 0 960 60 100",
+            "add-note 0 960 960 64 100",
+        ]);
+        assert_eq!(
+            difference(&before, &after),
+            [
+                "Track 1 pan C -> R40",
+                "unmute Track 1",
+                "solo Track 1",
+                "unsolo Track 2",
+                "remove the tempo change at bar 2 beat 1",
+                "add clip 0 on Track 1, bar 1 beat 1, 4 beats, with 2 notes",
+            ]
+        );
+    }
 }
