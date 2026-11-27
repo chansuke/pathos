@@ -12,13 +12,15 @@ env:
   KANI_VERSION: 0.68.0
 
 jobs:
-  # Each harness runs in its own job, so that its solver has a runner to itself
-  # and the slowest harnesses run side by side within the time limits (ADR 16).
+  # Fast harnesses run together in one batch job to avoid installing Kani on
+  # dozens of runners; slow note and split harnesses each get a runner to
+  # themselves so their solvers run side by side within the limits (ADR 16).
   list:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
-      harnesses: ${{ steps.list.outputs.harnesses }}
+      fast: ${{ steps.list.outputs.fast }}
+      slow: ${{ steps.list.outputs.slow }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -35,16 +37,59 @@ jobs:
         working-directory: crates/pathos-core
         run: |
           cargo kani list --format json
-          echo "harnesses=$(jq -c '[."standard-harnesses"[][]]' kani-list.json)" >> "$GITHUB_OUTPUT"
+          jq -e '[."standard-harnesses"[][]] | length > 0' kani-list.json > /dev/null
+          echo "fast=$(jq -c '[."standard-harnesses"[][] | select(test("split_clip|note") | not)]' kani-list.json)" >> "$GITHUB_OUTPUT"
+          echo "slow=$(jq -c '[."standard-harnesses"[][] | select(test("split_clip|note"))]' kani-list.json)" >> "$GITHUB_OUTPUT"
+
+  fast:
+    needs: list
+    if: ${{ needs.list.outputs.fast != '[]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Kani
+        run: |
+          cargo install --locked kani-verifier --version "$KANI_VERSION"
+          cargo kani setup
+      - name: Check the fast proof harnesses
+        working-directory: crates/pathos-core
+        env:
+          HARNESSES: ${{ needs.list.outputs.fast }}
+        run: |
+          while true; do free -m | awk 'NR == 2 { print $3 }' >> "$RUNNER_TEMP/memory.txt"; sleep 10; done &
+          status=0
+          : > "$RUNNER_TEMP/kani.log"
+          while IFS= read -r harness; do
+            cargo kani --output-format terse -Z unstable-options --harness-timeout 10m \
+              --exact --harness "$harness" 2>&1 | tee -a "$RUNNER_TEMP/kani.log" || status=1
+          done < <(jq -r '.[]' <<< "$HARNESSES")
+          exit "$status"
+      - name: Report the harnesses
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "### Kani (fast batch)"
+            echo '```'
+            grep -E 'Checking harness|VERIFICATION|cover properties|Verification Time|Complete|Failed' "$RUNNER_TEMP/kani.log" || true
+            echo '```'
+            echo "Peak memory in use: $(sort -n "$RUNNER_TEMP/memory.txt" | tail -1) MiB"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Check that each harness satisfies its cover properties
+        if: ${{ !cancelled() }}
+        run: scripts/check-kani-covers.sh "$RUNNER_TEMP/kani.log"
 
   harness:
     needs: list
+    if: ${{ needs.list.outputs.slow != '[]' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        harness: ${{ fromJSON(needs.list.outputs.harnesses) }}
+        harness: ${{ fromJSON(needs.list.outputs.slow) }}
     name: harness (${{ matrix.harness }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -78,32 +123,20 @@ jobs:
       # unreachable. Such a harness checks nothing, so fail it here.
       - name: Check that the harness satisfies its cover properties
         if: ${{ !cancelled() }}
-        run: |
-          awk '
-            /^Checking harness / { harness = $3; sub(/\.\.\.$/, "", harness); covered[harness] = 0 }
-            /\*\* [0-9]+ of [0-9]+ cover properties satisfied/ {
-              for (i = 1; i <= NF; i++) if ($i == "of") { satisfied = $(i - 1); total = $(i + 1) }
-              covered[harness] = 1
-              if (satisfied != total) {
-                printf "::error::%s: %d of %d cover properties satisfied\n", harness, satisfied, total
-                failed = 1
-              }
-            }
-            END {
-              for (harness in covered) if (!covered[harness]) {
-                printf "::error::%s has no cover property\n", harness
-                failed = 1
-              }
-              exit failed
-            }' "$RUNNER_TEMP/kani.log"
+        run: scripts/check-kani-covers.sh "$RUNNER_TEMP/kani.log"
 
   # The check that a pull request requires: every harness passed.
   verify:
-    needs: harness
+    needs: [list, fast, harness]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - name: Require every harness to pass
         env:
-          RESULT: ${{ needs.harness.result }}
-        run: test "$RESULT" = success
+          LIST_RESULT: ${{ needs.list.result }}
+          FAST_RESULT: ${{ needs.fast.result }}
+          HARNESS_RESULT: ${{ needs.harness.result }}
+        run: |
+          test "$LIST_RESULT" = success
+          test "$FAST_RESULT" = success -o "$FAST_RESULT" = skipped
+          test "$HARNESS_RESULT" = success -o "$HARNESS_RESULT" = skipped

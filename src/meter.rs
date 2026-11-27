@@ -13,8 +13,21 @@ const FALL_DECIBELS_PER_SECOND: f32 = 24.0;
 const FLOOR_DECIBELS: f32 = -60.0;
 /// The loudest level the meter shows, the most a volume can raise a note.
 const CEILING_DECIBELS: f32 = 6.0;
+/// Where the meter's high zone begins, 6 dB below full scale.
+const HIGH_DECIBELS: f32 = -6.0;
 /// How long a held peak stays before it falls.
 const HOLD: Duration = Duration::from_secs(2);
+
+/// Which zone of the meter a level falls into (ADR 25, ADR 30).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Zone {
+    /// Below -6 dB.
+    Low,
+    /// From -6 dB up to full scale (0 dB).
+    High,
+    /// At or above full scale (0 dB), or non-finite.
+    Clip,
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Meter {
@@ -85,6 +98,19 @@ pub fn fraction(level: f32) -> f32 {
     }
     let decibels = 20.0 * level.log10();
     ((decibels - FLOOR_DECIBELS) / (CEILING_DECIBELS - FLOOR_DECIBELS)).min(1.0)
+}
+
+/// The meter zone that `level` falls into (ADR 25, ADR 30): low below -6 dB,
+/// high from -6 dB up to full scale, and clip at full scale and above.
+pub fn zone(level: f32) -> Zone {
+    let high = 10f32.powf(HIGH_DECIBELS / 20.0);
+    if level < high {
+        Zone::Low
+    } else if level < 1.0 {
+        Zone::High
+    } else {
+        Zone::Clip
+    }
 }
 
 #[cfg(test)]
@@ -191,5 +217,20 @@ mod tests {
         assert!(close(fraction(0.5), (60.0 - 6.0206) / 66.0));
         assert_eq!(fraction(2.0), 1.0);
         assert_eq!(fraction(4.0), 1.0);
+    }
+
+    #[test]
+    fn zone_classifies_levels_at_the_exact_minus_6_db_and_full_scale_boundaries() {
+        let high = 10f32.powf(-6.0 / 20.0);
+        assert_eq!(zone(0.0), Zone::Low);
+        assert_eq!(zone(0.5), Zone::Low);
+        assert_eq!(zone(high * (1.0 - 1e-6)), Zone::Low);
+        assert_eq!(zone(high), Zone::High);
+        assert_eq!(zone(0.999), Zone::High);
+        assert_eq!(zone(1.0), Zone::Clip);
+        assert_eq!(zone(1.01), Zone::Clip);
+        assert_eq!(zone(2.0), Zone::Clip);
+        assert_eq!(zone(f32::INFINITY), Zone::Clip);
+        assert_eq!(zone(f32::NAN), Zone::Clip);
     }
 }

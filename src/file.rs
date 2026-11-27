@@ -97,6 +97,7 @@ impl Saved {
     pub fn directory(&self) -> PathBuf {
         self.path()
             .and_then(Path::parent)
+            .filter(|parent| !parent.as_os_str().is_empty())
             .map(Path::to_path_buf)
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_default()
@@ -221,5 +222,17 @@ mod tests {
         fs::write(&broken, "add-track\nplay\n").unwrap();
         let error = open(&broken).unwrap_err();
         assert_eq!(error.to_string(), "line 2: not an edit");
+    }
+
+    #[test]
+    fn a_bare_relative_filename_falls_back_to_the_working_directory() {
+        let bare = Saved::new(Some(PathBuf::from("song.pathos")), &Document::default());
+        assert_eq!(bare.directory(), std::env::current_dir().unwrap());
+
+        let nested = Saved::new(
+            Some(PathBuf::from("projects/song.pathos")),
+            &Document::default(),
+        );
+        assert_eq!(nested.directory(), PathBuf::from("projects"));
     }
 }

@@ -3,6 +3,9 @@ number: 16
 title: Leave splitting a clip with notes out of the Kani harnesses
 status: accepted
 date: 2026-11-16
+links:
+- target: 11
+  kind: amends
 ---
 
 # Leave splitting a clip with notes out of the Kani harnesses

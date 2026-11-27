@@ -34,3 +34,4 @@
 * [34. Run the comparison with REAPER locally, not in CI](0034-run-the-comparison-with-reaper-locally-not-in-ci.md)
 * [35. Connect agents to the running app through a local socket and an MCP server, as proposals the user accepts](0035-connect-agents-to-the-running-app-through-a-local-socket-and-an-mcp-server-as-proposals-the-user-accepts.md)
 * [36. Review through the connected agent with measurements of the render and anchored findings](0036-review-through-the-connected-agent-with-measurements-of-the-render-and-anchored-findings.md)
+* [37. Keep the window at least as large as the top bar and one lane above the piano roll](0037-keep-the-window-at-least-as-large-as-the-top-bar-and-one-lane-above-the-piano-roll.md)

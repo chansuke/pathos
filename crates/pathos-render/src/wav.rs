@@ -15,19 +15,40 @@ const BYTES_PER_FRAME: u32 = CHANNELS as u32 * BYTES_PER_SAMPLE;
 /// header of the `data` chunk.
 const HEADER: u32 = 4 + (8 + 18) + (8 + 4) + 8;
 
-/// Writes `frames` at `sample_rate` as a WAV file. Fails with
+/// The size fields of a stereo float WAV header: the frame count in the `fact`
+/// chunk, the byte length of the `data` chunk, and the byte length of the
+/// `RIFF` chunk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Sizes {
+    /// The number of frames, stored in the `fact` chunk.
+    pub count: u32,
+    /// The byte length of the `data` chunk payload.
+    pub data: u32,
+    /// The byte length of the `RIFF` chunk payload.
+    pub riff: u32,
+}
+
+/// Computes the header sizes for a WAV file holding `frames` frames. Fails with
 /// [`io::ErrorKind::InvalidInput`] when the file would exceed the 4 GiB that a
 /// WAV file can hold.
-pub fn write(out: &mut impl Write, sample_rate: NonZeroU32, frames: &[Frame]) -> io::Result<()> {
+pub fn sizes(frames: u64) -> io::Result<Sizes> {
     let too_long = || {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             "a WAV file holds at most 4 GiB",
         )
     };
-    let count = u32::try_from(frames.len()).map_err(|_| too_long())?;
+    let count = u32::try_from(frames).map_err(|_| too_long())?;
     let data = count.checked_mul(BYTES_PER_FRAME).ok_or_else(too_long)?;
     let riff = data.checked_add(HEADER).ok_or_else(too_long)?;
+    Ok(Sizes { count, data, riff })
+}
+
+/// Writes `frames` at `sample_rate` as a WAV file. Fails with
+/// [`io::ErrorKind::InvalidInput`] when the file would exceed the 4 GiB that a
+/// WAV file can hold.
+pub fn write(out: &mut impl Write, sample_rate: NonZeroU32, frames: &[Frame]) -> io::Result<()> {
+    let Sizes { count, data, riff } = sizes(frames.len() as u64)?;
     let rate = sample_rate.get();
     let byte_rate = rate.checked_mul(BYTES_PER_FRAME).ok_or_else(|| {
         io::Error::new(

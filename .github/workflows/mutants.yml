@@ -27,7 +27,8 @@ jobs:
       - name: Build the Lean model
         run: nix develop -c lake -d spec build
       # A pull request mutates only the lines it changes, in the core, the
-      # agent interface and the editor; the schedule mutates the whole core
+      # agent interface, the editor, the measurements and the render; the
+      # schedule mutates the core, the agent interface and the editor in full
       # (ADR 13).
       - name: Select the mutants
         env:
@@ -35,18 +36,20 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           if [ "$EVENT" != pull_request ]; then
-            echo "core" > "$RUNNER_TEMP/packages.txt"
+            printf '%s\n' core agent editor > "$RUNNER_TEMP/packages.txt"
             exit 0
           fi
           : > "$RUNNER_TEMP/packages.txt"
           while read -r name paths; do
             # shellcheck disable=SC2086 # one argument per path
-            git diff "$BASE_SHA" -- $paths > "$RUNNER_TEMP/$name.diff"
+            git diff "$BASE_SHA...HEAD" -- $paths > "$RUNNER_TEMP/$name.diff"
             [ -s "$RUNNER_TEMP/$name.diff" ] && echo "$name" >> "$RUNNER_TEMP/packages.txt"
           done <<'LIST'
           core crates/pathos-core
           agent crates/pathos-agent
           editor src/editor.rs
+          measure crates/pathos-measure
+          render crates/pathos-render
           LIST
           cat "$RUNNER_TEMP/packages.txt"
       - name: Check that the tests catch each mutant
@@ -56,13 +59,18 @@ jobs:
         run: |
           status=0
           while read -r name; do
+            args=()
             case $name in
               core) package=pathos-core ;;
               agent) package=pathos-agent ;;
-              editor) package=pathos ;;
+              editor)
+                package=pathos
+                args=(-f src/editor.rs)
+                ;;
+              measure) package=pathos-measure ;;
+              render) package=pathos-render ;;
             esac
-            args=()
-            [ "$EVENT" = pull_request ] && args=(--in-diff "$RUNNER_TEMP/$name.diff")
+            [ "$EVENT" = pull_request ] && args+=(--in-diff "$RUNNER_TEMP/$name.diff")
             nix develop -c cargo mutants -p "$package" --test-package "$package" \
               -o "$RUNNER_TEMP/$name" "${args[@]}" || status=1
           done < "$RUNNER_TEMP/packages.txt"

@@ -7,9 +7,13 @@ Pathos.Edit [type] fda82eefb207dada
 Pathos.Error [type] 0aafb5b28c53c8f5
 Pathos.Error.name [def] 78a2a8cab7edfde9
 Pathos.Event [type] fc9ef94a76af9fc4
+Pathos.Event.isOff [def] a5dad06927d4ff3d
+Pathos.Event.isOn [def] 5e06a31da44eb944
 Pathos.Event.key [def] 574e996b29979f94
 Pathos.Event.le [def] dc21d5ad646a1017
+Pathos.Event.pitch [def] 6914af7b24e4cf83
 Pathos.Event.render [def] e3af125dc0dd8797
+Pathos.Event.sample [def] 4f79914ce47a3f16
 Pathos.Event.track [def] f1e87c438867ffe5
 Pathos.History [type] 5d81c1c115678fe3
 Pathos.History.edit [def] 91924b7728ee7b95

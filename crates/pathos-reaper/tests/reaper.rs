@@ -195,17 +195,37 @@ fn scenarios_agree_with_reaper() {
     }
 }
 
+/// An action in a generated editing sequence. The targeted removals select an
+/// existing note or tempo change from the current project so accepted removals
+/// occur often even in small case counts.
+#[derive(Clone, Copy, Debug)]
+enum Action {
+    Edit(Edit),
+    RemoveExistingNote(usize),
+    RemoveExistingTempo(usize),
+}
+
 /// A command for a project of up to three tracks and a few seconds. Some are
 /// rejected, such as a note outside its clip, and leave the project as it is.
+/// Tempo spans 30 to 960 BPM (within REAPER's 1..=960 BPM range, while keeping
+/// generated renders short), and pitch covers the full MIDI range `0..128`.
 fn command() -> impl Strategy<Value = Command> {
     let track = 0..3u64;
     let id = 0..6u64;
     let tick = 0..7_680u64;
+    let tempo = prop_oneof![
+        // Fast: 240..=960 BPM.
+        1 => 62_500..250_000u64,
+        // Medium: 60..=240 BPM.
+        1 => 250_000..1_000_000u64,
+        // Slow: 30..=60 BPM.
+        1 => 1_000_000..=2_000_000u64,
+    ];
     prop_oneof![
         1 => Just(Command::AddTrack),
         2 => (track.clone(), tick.clone(), 1..3_840u64)
             .prop_map(|(track, start, length)| Command::AddClip { track, start, length }),
-        8 => (id.clone(), 0..3_840u64, 1..960u64, 36..96u64, 1..128u64).prop_map(
+        8 => (id.clone(), 0..3_840u64, 1..960u64, 0..128u64, 1..128u64).prop_map(
             |(id, start, length, pitch, velocity)| Command::AddNote {
                 id,
                 start,
@@ -214,15 +234,19 @@ fn command() -> impl Strategy<Value = Command> {
                 velocity,
             }
         ),
+        1 => (id.clone(), 0..3_840u64, 0..128u64)
+            .prop_map(|(id, start, pitch)| Command::RemoveNote { id, start, pitch }),
         1 => (id.clone(), track.clone(), tick.clone())
             .prop_map(|(id, track, start)| Command::MoveClip { id, track, start }),
         1 => (id.clone(), tick.clone()).prop_map(|(id, tick)| Command::SplitClip { id, tick }),
-        1 => (tick.clone(), 250_000..1_000_000u64).prop_map(|(tick, us_per_quarter)| {
+        1 => id.prop_map(|id| Command::DeleteClip { id }),
+        2 => (tick.clone(), tempo).prop_map(|(tick, us_per_quarter)| {
             Command::SetTempo {
                 tick,
                 us_per_quarter,
             }
         }),
+        1 => tick.prop_map(|tick| Command::RemoveTempo { tick }),
         1 => (track.clone(), 0..=2_000u64)
             .prop_map(|(track, volume)| Command::SetTrackVolume { track, volume }),
         1 => (track.clone(), 0..=200u64).prop_map(|(track, pan)| Command::SetTrackPan { track, pan }),
@@ -233,9 +257,19 @@ fn command() -> impl Strategy<Value = Command> {
     ]
 }
 
-/// A project built from generated commands, starting with a track and a clip.
+fn action() -> impl Strategy<Value = Action> {
+    prop_oneof![
+        20 => command().prop_map(|command| Action::Edit(Edit::Apply(command))),
+        2 => any::<usize>().prop_map(Action::RemoveExistingNote),
+        2 => any::<usize>().prop_map(Action::RemoveExistingTempo),
+        2 => Just(Action::Edit(Edit::Undo)),
+        2 => Just(Action::Edit(Edit::Redo)),
+    ]
+}
+
+/// A project built from generated edits, starting with a track and a clip.
 fn generated_project() -> impl Strategy<Value = Document> {
-    prop::collection::vec(command(), 1..40).prop_map(|commands| {
+    prop::collection::vec(action(), 1..40).prop_map(|actions| {
         let mut document = Document::default();
         let start = [
             Command::AddTrack,
@@ -245,11 +279,123 @@ fn generated_project() -> impl Strategy<Value = Document> {
                 length: 3_840,
             },
         ];
-        for command in start.into_iter().chain(commands) {
+        for command in start {
             let _ = document.edit(Edit::Apply(command));
+        }
+        for step in actions {
+            match step {
+                Action::Edit(edit) => {
+                    let _ = document.edit(edit);
+                }
+                Action::RemoveExistingNote(pick) => {
+                    let project = document.history().present();
+                    let notes: Vec<(u64, u64, u64)> = project
+                        .clips()
+                        .iter()
+                        .flat_map(|clip| {
+                            project
+                                .notes(clip.id)
+                                .map(move |note| (clip.id, note.start, u64::from(note.pitch)))
+                        })
+                        .collect();
+                    if !notes.is_empty() {
+                        let (id, start, pitch) = notes[pick % notes.len()];
+                        let _ =
+                            document.edit(Edit::Apply(Command::RemoveNote { id, start, pitch }));
+                    }
+                }
+                Action::RemoveExistingTempo(pick) => {
+                    let ticks: Vec<u64> = document
+                        .history()
+                        .present()
+                        .tempo()
+                        .iter()
+                        .filter(|change| change.tick > 0)
+                        .map(|change| change.tick)
+                        .collect();
+                    if !ticks.is_empty() {
+                        let tick = ticks[pick % ticks.len()];
+                        let _ = document.edit(Edit::Apply(Command::RemoveTempo { tick }));
+                    }
+                }
+            }
         }
         document
     })
+}
+
+/// The REAPER comparison generator exercises clip/note/tempo removals, undo,
+/// redo, the full MIDI pitch range and tempos outside 60..240 BPM, and every
+/// generated project converts cleanly without running REAPER.
+#[test]
+fn generated_projects_cover_edits_pitches_and_tempos() {
+    use proptest::strategy::ValueTree;
+    use proptest::test_runner::TestRunner;
+
+    let mut runner = TestRunner::deterministic();
+    let strategy = generated_project();
+
+    let mut saw_delete_clip = false;
+    let mut saw_remove_note = false;
+    let mut saw_remove_tempo = false;
+    let mut saw_undo = false;
+    let mut saw_redo = false;
+    let mut saw_low_pitch = false;
+    let mut saw_high_pitch = false;
+    let mut saw_fast_tempo = false;
+    let mut saw_slow_tempo = false;
+
+    for _ in 0..120 {
+        let document = strategy
+            .new_tree(&mut runner)
+            .expect("generate document")
+            .current();
+        for edit in document.edits() {
+            match *edit {
+                Edit::Undo => saw_undo = true,
+                Edit::Redo => saw_redo = true,
+                Edit::Apply(Command::DeleteClip { .. }) => saw_delete_clip = true,
+                Edit::Apply(Command::RemoveNote { .. }) => saw_remove_note = true,
+                Edit::Apply(Command::RemoveTempo { .. }) => saw_remove_tempo = true,
+                Edit::Apply(Command::AddNote { pitch, .. }) => {
+                    if pitch < 36 {
+                        saw_low_pitch = true;
+                    }
+                    if pitch >= 96 {
+                        saw_high_pitch = true;
+                    }
+                }
+                Edit::Apply(Command::SetTempo { us_per_quarter, .. }) => {
+                    if us_per_quarter < 250_000 {
+                        saw_fast_tempo = true;
+                    }
+                    if us_per_quarter >= 1_000_000 {
+                        saw_slow_tempo = true;
+                    }
+                }
+                Edit::Apply(_) => {}
+            }
+        }
+
+        let project = document.history().present();
+        let rate = NonZeroU32::new(RATES[0]).expect("non-zero rate");
+        let length = frames(project, rate.get());
+        for layer in [Layer::Position, Layer::Mix] {
+            let rpp = pathos_reaper::convert(project, rate, length, layer);
+            assert!(rpp.starts_with("<REAPER_PROJECT "));
+            assert!(rpp.trim_end().ends_with('>'));
+        }
+    }
+
+    assert!(saw_delete_clip, "generator produced DeleteClip");
+    assert!(saw_remove_note, "generator produced RemoveNote");
+    assert!(saw_remove_tempo, "generator produced RemoveTempo");
+    assert!(saw_undo, "generator produced Undo");
+    assert!(saw_redo, "generator produced Redo");
+    assert!(saw_low_pitch, "generator produced MIDI pitch < 36");
+    assert!(saw_high_pitch, "generator produced MIDI pitch >= 96");
+    assert!(saw_fast_tempo, "generator produced tempo > 240 BPM");
+    assert!(saw_slow_tempo, "generator produced tempo <= 60 BPM");
 }
 
 /// Each case runs REAPER four times, so the default number of cases is small;

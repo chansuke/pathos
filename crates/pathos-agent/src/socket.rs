@@ -3,7 +3,7 @@
 use std::ffi::OsString;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -89,7 +89,7 @@ impl Listener {
                 Ok(()) => {}
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                     let metadata = fs::symlink_metadata(directory)?;
-                    if !metadata.is_dir() || metadata.permissions().mode() & 0o077 != 0 {
+                    if !directory_is_private(&metadata, current_uid()) {
                         return Err(BindError::NotPrivate(directory.to_path_buf()));
                     }
                 }
@@ -135,6 +135,24 @@ impl Drop for Listener {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
     }
+}
+
+/// Whether an existing socket directory is a real directory owned by `owner`
+/// with no group or other permissions (ADR 35).
+fn directory_is_private(metadata: &fs::Metadata, owner: u32) -> bool {
+    metadata.is_dir() && metadata.permissions().mode() & 0o077 == 0 && metadata.uid() == owner
+}
+
+/// The effective user id of this process, to verify that an existing socket
+/// directory belongs to the same user (ADR 35).
+fn current_uid() -> u32 {
+    // SAFETY: POSIX `geteuid` takes no arguments, cannot fail, and returns
+    // `uid_t` (`u32` on Unix platforms matching `MetadataExt::uid`).
+    unsafe extern "C" {
+        fn geteuid() -> u32;
+    }
+    // SAFETY: `geteuid` has no preconditions and never fails.
+    unsafe { geteuid() }
 }
 
 /// Answers the requests of one connection, a line at a time.
@@ -333,5 +351,32 @@ mod tests {
             .join("pathos")
             .join("agent.sock");
         assert!(request(&path, &Request::Project).is_err());
+    }
+
+    #[test]
+    fn directory_privacy_checks_type_permissions_and_owner() {
+        let base = directory("socket-privacy-predicate");
+        let private = base.join("private");
+        fs::DirBuilder::new().mode(0o700).create(&private).unwrap();
+        let meta = fs::symlink_metadata(&private).unwrap();
+        let uid = current_uid();
+        assert_eq!(meta.uid(), uid);
+        assert!(directory_is_private(&meta, uid));
+        assert!(!directory_is_private(&meta, uid.wrapping_add(1)));
+
+        let open = base.join("open");
+        fs::DirBuilder::new().mode(0o755).create(&open).unwrap();
+        fs::set_permissions(&open, fs::Permissions::from_mode(0o755)).unwrap();
+        let open_meta = fs::symlink_metadata(&open).unwrap();
+        assert!(!directory_is_private(&open_meta, uid));
+
+        let link = base.join("link");
+        std::os::unix::fs::symlink(&private, &link).unwrap();
+        let link_meta = fs::symlink_metadata(&link).unwrap();
+        assert!(!directory_is_private(&link_meta, uid));
+        assert!(matches!(
+            Listener::bind(&link.join("agent.sock")),
+            Err(BindError::NotPrivate(_))
+        ));
     }
 }

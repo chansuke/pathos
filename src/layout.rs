@@ -213,6 +213,18 @@ pub fn master_rect(width: f32) -> Rect {
     }
 }
 
+/// The smallest window, width then height, that the layout fits (ADR 37):
+/// the master volume keeps the top bar's padding from the metronome button,
+/// and one lane shows above the piano roll.
+pub fn min_window_size() -> (f32, f32) {
+    let metronome = metronome_button_rect();
+    // The master volume lies a fixed distance left of the right edge.
+    let right_group = -master_rect(0.0).x;
+    let width = metronome.x + metronome.width + BAR_PADDING + right_group;
+    let height = TIMELINE_TOP + LANE_HEIGHT + ROLL_RULER_HEIGHT + roll_height() + FOOTER_HEIGHT;
+    (width, height)
+}
+
 /// The meter of `channel`, 0 for the left and 1 for the right, at the right
 /// of the top bar (ADR 25). Its scale lies below the right one.
 pub fn meter_rect(width: f32, channel: usize) -> Rect {
@@ -365,7 +377,8 @@ pub fn playhead_x(project: &Project, sample_rate: NonZeroU32, frame: u64) -> f32
 /// The last tick that starts at or before frame `frame` at `sample_rate`.
 pub fn tick_at(project: &Project, sample_rate: NonZeroU32, frame: u64) -> Tick {
     let tempo = project.tempo_map();
-    let at = |tick: Tick| tempo.micros(tick) * u128::from(sample_rate.get()) / 1_000_000;
+    let rate = u64::from(sample_rate.get());
+    let at = |tick: Tick| tempo.sample_of(rate, tick);
     let (mut low, mut high) = (0, MAX_TICK);
     while low < high {
         let middle = low + (high - low).div_ceil(2);
@@ -683,6 +696,29 @@ mod tests {
     }
 
     #[test]
+    fn the_smallest_window_fits_the_top_bar_and_a_lane_above_the_roll() {
+        let (width, height) = min_window_size();
+        let metronome = metronome_button_rect();
+        let toggles_end = metronome.x + metronome.width + BAR_PADDING;
+        assert_eq!(master_rect(width).x, toggles_end, "the master just fits");
+        assert!(
+            master_rect(width - 1.0).x < toggles_end,
+            "narrower, it would cover the metronome"
+        );
+        let view = View {
+            width,
+            height,
+            scroll: 0.0,
+        };
+        assert_eq!(lanes_rect(&view, true).height, LANE_HEIGHT, "one lane");
+        assert!(roll_top(height - 1.0) - ROLL_RULER_HEIGHT < TIMELINE_TOP + LANE_HEIGHT);
+        assert!(
+            WINDOW_WIDTH >= width && WINDOW_HEIGHT >= height,
+            "opens larger"
+        );
+    }
+
+    #[test]
     fn a_held_peak_is_marked_on_its_meter() {
         let width = 1200.0;
         let meter = meter_rect(width, 1);
@@ -981,5 +1017,70 @@ mod tests {
             hit(&project, &VIEW, None, HEADER_WIDTH, roll_top(WINDOW_HEIGHT)),
             Hit::Nothing
         );
+    }
+
+    #[test]
+    fn tick_at_agrees_with_sample_of_at_44_1_khz_fractional_ticks() {
+        let project = Project::default();
+        let rate = NonZeroU32::new(44_100).unwrap();
+        let tempo = project.tempo_map();
+
+        // ADR 32: at 44.1 kHz and 120 BPM, tick 15 is 344.53125 -> 345,
+        // tick 16 is 367.5 -> 368 (half rounded up), tick 17 is 390.46875 -> 390.
+        assert_eq!(tempo.sample_of(44_100, 15), 345);
+        assert_eq!(tempo.sample_of(44_100, 16), 368);
+        assert_eq!(tempo.sample_of(44_100, 17), 390);
+
+        assert_eq!(tick_at(&project, rate, 344), 14);
+        assert_eq!(tick_at(&project, rate, 345), 15);
+        assert_eq!(tick_at(&project, rate, 367), 15);
+        assert_eq!(tick_at(&project, rate, 368), 16);
+        assert_eq!(tick_at(&project, rate, 389), 16);
+        assert_eq!(tick_at(&project, rate, 390), 17);
+    }
+
+    #[test]
+    fn tick_at_agrees_with_sample_of_across_tempo_changes() {
+        let mut history = History::default();
+        // Tempos from ADR 32 (~82.07 BPM and ~116.05 BPM) on non-beat ticks.
+        history
+            .edit(Edit::Apply(Command::SetTempo {
+                tick: 0,
+                us_per_quarter: 731_083,
+            }))
+            .unwrap();
+        history
+            .edit(Edit::Apply(Command::SetTempo {
+                tick: 517,
+                us_per_quarter: 517_018,
+            }))
+            .unwrap();
+        let project = history.present();
+        let tempo = project.tempo_map();
+
+        for hz in [44_100_u32, 48_000_u32] {
+            let rate = NonZeroU32::new(hz).unwrap();
+            let rate_u64 = u64::from(hz);
+            for tick in [0, 1, 15, 16, 17, 516, 517, 518, 960, 1921, 3840] {
+                let sample = tempo.sample_of(rate_u64, tick) as u64;
+                let found = tick_at(project, rate, sample);
+                assert!(
+                    found >= tick,
+                    "hz={hz} tick={tick} sample={sample} found={found}"
+                );
+                assert!(tempo.sample_of(rate_u64, found) <= u128::from(sample));
+                assert!(tempo.sample_of(rate_u64, found + 1) > u128::from(sample));
+                if sample > 0
+                    && tick > 0
+                    && tempo.sample_of(rate_u64, tick - 1) < u128::from(sample)
+                {
+                    assert_eq!(
+                        tick_at(project, rate, sample - 1),
+                        tick - 1,
+                        "hz={hz} tick={tick} sample={sample}"
+                    );
+                }
+            }
+        }
     }
 }

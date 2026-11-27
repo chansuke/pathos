@@ -276,16 +276,21 @@ impl Editor {
         let Some(edit) = self.edit_for(input) else {
             return false;
         };
-        match edit {
-            Edit::Apply(Command::AddClip { .. }) => {
-                self.selected = Some(self.history().next_clip_id());
-            }
-            // The lanes end at the new track, so it is in view.
-            Edit::Apply(Command::AddTrack) => self.scroll = f32::INFINITY,
-            _ => {}
-        }
+        let next_clip_id = self.history().next_clip_id();
         self.rejected = self.document.edit(edit).err();
-        self.rejected.is_none()
+        if self.rejected.is_none() {
+            match edit {
+                Edit::Apply(Command::AddClip { .. }) => {
+                    self.selected = Some(next_clip_id);
+                }
+                // The lanes end at the new track, so it is in view.
+                Edit::Apply(Command::AddTrack) => self.scroll = f32::INFINITY,
+                _ => {}
+            }
+            true
+        } else {
+            false
+        }
     }
 
     /// The edit `input` makes, if any, after updating the selection, the drag
@@ -1020,5 +1025,36 @@ mod tests {
         assert_eq!(editor.history().present(), after(&SETUP[..2]).present());
         editor.handle(Input::Key(Key::Redo));
         assert_eq!(editor.history().present(), after(&SETUP).present());
+    }
+
+    #[test]
+    fn a_rejected_add_clip_does_not_select_a_clip_created_later_with_that_id() {
+        let mut editor = Editor::default();
+        editor.handle(Input::Key(Key::AddTrack));
+        // Place clip 0 at beat 4..8 and deselect it.
+        click(&mut editor, in_lane(0, 4.0), 2);
+        assert_eq!(editor.selected(), Some(0));
+        click(&mut editor, in_lane(0, 0.5), 1);
+        assert_eq!(editor.selected(), None);
+
+        // Double-click at beat 2: AddClip (beat 2..6) overlaps clip 0 and is rejected.
+        // Next clip id is 1, which must not be stored as selected.
+        assert!(!editor.handle(Input::Down {
+            x: in_lane(0, 2.0).0,
+            y: in_lane(0, 2.0).1,
+            clicks: 2,
+        }));
+        assert_eq!(editor.rejected(), Some(EditError::Overlap));
+        assert_eq!(editor.selected(), None);
+
+        // An agent proposal creates clip 1 elsewhere; it must not become selected.
+        let mut proposals = Proposals::default();
+        let lines = ["add-clip 0 7680 3840".to_string()];
+        proposals
+            .propose(editor.document(), "second clip".into(), &lines)
+            .unwrap();
+        assert!(editor.apply_proposal(&mut proposals));
+        assert_eq!(editor.history().present().clips().len(), 2);
+        assert_eq!(editor.selected(), None);
     }
 }

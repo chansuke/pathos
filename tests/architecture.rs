@@ -36,6 +36,7 @@ const LAYERS: &[&[&str]] = &[
     // Plain Rust, with no window: their tests run without one.
     &["file", "layout", "meter", "readout"],
     &["editor", "theme"],
+    &["controller"],
     // The views that gpui draws.
     &["agent"],
 ];

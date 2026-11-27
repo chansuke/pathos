@@ -2,7 +2,7 @@
 
 use std::num::NonZeroU32;
 
-use pathos_core::{Command, History};
+use pathos_core::{Command, History, Project};
 use pathos_reaper::{IMPULSES, INSTRUMENT, Layer, convert, instrument};
 
 fn project(commands: &[Command]) -> History {
@@ -218,4 +218,38 @@ fn every_scenario_loads() {
         }
     }
     assert!(count > 0, "scenarios in {}", directory.display());
+}
+
+/// An empty project converts into a valid REAPER project at 120 BPM with unity
+/// master gain and no tracks or items.
+#[test]
+fn an_empty_project_converts_without_tracks() {
+    let empty = Project::default();
+    for layer in [Layer::Mix, Layer::Position] {
+        let rpp = convert(&empty, RATE, 48_000, layer);
+        let lines = lines(&rpp);
+        for expected in [
+            "<REAPER_PROJECT 0.1 \"7.86\" 0",
+            "SAMPLERATE 48000 1 0",
+            "TEMPO 120 4 4",
+            "RENDER_RANGE 0 0 1 0 0",
+            "MASTER_VOLUME 1 0 -1 -1 1",
+            "PT 0 120 1",
+        ] {
+            assert!(lines.contains(&expected), "{expected:?} in\n{rpp}");
+        }
+        assert!(!rpp.contains("<TRACK"), "{rpp}");
+        assert!(!rpp.contains("<ITEM"), "{rpp}");
+        assert!(
+            !lines.iter().any(|line| line.starts_with("E ")),
+            "no MIDI events in\n{rpp}"
+        );
+        assert_eq!(lines.last().copied(), Some(">"));
+    }
+
+    let zero_length = convert(&empty, RATE, 0, Layer::Mix);
+    assert!(
+        lines(&zero_length).contains(&"RENDER_RANGE 0 0 0 0 0"),
+        "{zero_length}"
+    );
 }

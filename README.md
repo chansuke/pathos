@@ -47,8 +47,10 @@ cargo run --features gpui/runtime_shaders
 
 ### Windows
 
-Install [rustup](https://rustup.rs) (MSVC) and the Visual Studio Build Tools
-with "Desktop development with C++", then run `cargo run`.
+Native Windows is not currently supported: `pathos` depends on `pathos-agent`,
+whose local agent socket uses Unix domain sockets (`std::os::unix`, ADR 35),
+and CI does not build on Windows. On WSL2, follow the Linux (Nix) instructions
+above.
 
 See [docs/development.md](docs/development.md) for platform notes, audio
 examples and pinned dependencies.

@@ -52,7 +52,8 @@ Two checks keep the comparison from being forgotten:
   and
 * a CI job, `stated`, which the ruleset of `main` requires, fails a pull
   request that changes those crates unless its description has the line
-  `REAPER comparison: passed`.
+  `REAPER comparison: passed <key>`, where `<key>` is the output of
+  `scripts/reaper-key` for the head commit.
 
 The tests run one REAPER at a time: two at once sometimes left a WAV file cut
 short, and the license allows one computer at a time.
@@ -72,8 +73,10 @@ short, and the license allows one computer at a time.
 
 ### Confirmation
 
-`AGENTS.md` names the command and when to run it, the hook runs it, and the
-CI job checks that each such pull request states its result.
+`docs/verification.md` (referenced from `AGENTS.md`) names the command
+(`scripts/verify reaper`) and when to run it, the hook runs it and prints the
+keyed line, and the CI job checks that each such pull request states its result
+with the matching key.
 
 ## Pros and Cons of the Options
 

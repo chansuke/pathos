@@ -36,10 +36,12 @@ Chosen option: "cargo-mutants on the lines a pull request changes, and weekly
 on the whole core", because it measures each change when it is made and
 catches tests that weaken later.
 
-The Mutants workflow builds the model and runs `cargo mutants` on
-`pathos-core` with the tests of `pathos-core`. On a pull request it mutates only
-the lines of `crates/pathos-core` that the pull request changes; on Mondays it
-mutates the whole crate. It fails when a mutant is missed or times out and
+The Mutants workflow builds the model and runs `cargo mutants` on the crates
+covered by the suite. On a pull request it mutates only the lines changed in
+`crates/pathos-core`, `crates/pathos-agent`, `src/editor.rs`,
+`crates/pathos-measure` and `crates/pathos-render` (matching
+`scripts/verify mutants`); on Mondays it mutates `pathos-core`, `pathos-agent`
+and `src/editor.rs` in full. It fails when a mutant is missed or times out and
 lists the missed mutants in the job summary.
 
 A missed mutant is a gap in the tests, to be closed with a test or a better

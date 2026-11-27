@@ -36,20 +36,88 @@ esac
 rules=(
   $'comment\t*\t(^|[^A-Za-z])(TODO|FIXME|HACK|XXX)([^A-Za-z]|$)\tFix it in this change. If it is out of scope, open an issue and describe what the code does now as a fact, without a promise; better, add a test or a lint that fails until it is fixed.'
   $'comment\t*\t[Ww]ork-?around|[Ff]or now|[Qq]uick fix|[Bb]and-?aid|[Tt]emporary (fix|hack|patch)|[Uu]ntil .* (is|gets|are) fixed\tDo not explain away a workaround. Find the cause and fix it; if the cause is outside this repository, say which upstream behavior the code handles and link the upstream issue.'
-  $'code\t*.rs\t#\\[ignore\\]\tGive the reason: #[ignore = "why it does not run by default"], as the REAPER tests do. A test that fails is fixed, not ignored.'
+  $'code\t*.rs\t#\\[[[:space:]]*ignore([[:space:]]*=[[:space:]]*"[[:space:]]*")?[[:space:]]*\\]\tGive the reason: #[ignore = "why it does not run by default"], as the REAPER tests do. A test that fails is fixed, not ignored.'
   $'code\t*.sh\t#[[:space:]]*shellcheck[[:space:]]+disable=[A-Z0-9,]+[[:space:]]*$\tSay why after the directive: `# shellcheck disable=SC2086 # the paths are split on purpose`.'
   $'code\t.githooks/*\t#[[:space:]]*shellcheck[[:space:]]+disable=[A-Z0-9,]+[[:space:]]*$\tSay why after the directive: `# shellcheck disable=SC2086 # the paths are split on purpose`.'
 )
 
-# The comment part of LINE in FILE, empty when it has none. Rust uses `//`,
-# Lean `--`, and the others `#`; a `#` that starts an attribute such as
-# `#[cfg]` is code.
+# Extracts the comment portion of a Rust line (both `//` and `/* ... */`),
+# updating `in_block_comment` across lines in the hunk and setting `comment`.
+in_block_comment=false
+rs_comment() { # LINE
+  local rest=$1
+  comment=""
+  while [ -n "$rest" ]; do
+    if $in_block_comment; then
+      if [[ $rest == *'*/'* ]]; then
+        comment+=" ${rest%%'*/'*}*/"
+        rest=${rest#*'*/'}
+        in_block_comment=false
+      else
+        comment+=" $rest"
+        break
+      fi
+    else
+      local i=0 len=${#rest} in_str=false esc=false ch next found_kind=""
+      while ((i < len)); do
+        ch=${rest:i:1}
+        if $in_str; then
+          if $esc; then
+            esc=false
+          elif [ "$ch" = '\' ]; then
+            esc=true
+          elif [ "$ch" = '"' ]; then
+            in_str=false
+          fi
+        else
+          if [ "$ch" = "'" ] && [ "${rest:i+1:2}" = "\"'" ]; then
+            i=$((i + 3))
+            continue
+          elif [ "$ch" = '"' ]; then
+            in_str=true
+          elif [ "$ch" = '/' ] && ((i + 1 < len)); then
+            next=${rest:i+1:1}
+            if [ "$next" = '/' ]; then
+              comment+=" ${rest:i}"
+              rest=""
+              found_kind=line
+              break
+            elif [ "$next" = '*' ]; then
+              rest=${rest:i}
+              in_block_comment=true
+              found_kind=block
+              break
+            fi
+          fi
+        fi
+        i=$((i + 1))
+      done
+      [ -z "$found_kind" ] && break
+      if [ "$found_kind" = block ]; then
+        local part=${rest:2}
+        if [[ $part == *'*/'* ]]; then
+          comment+=" /*${part%%'*/'*}*/"
+          rest=${part#*'*/'}
+          in_block_comment=false
+        else
+          comment+=" $rest"
+          break
+        fi
+      fi
+    fi
+  done
+}
+
+# The comment part of LINE in FILE, stored in `comment`, empty when it has none.
+# Rust uses `//` and `/* ... */`, Lean `--`, and the others `#`; a `#` that
+# starts an attribute such as `#[cfg]` is code.
 comment_of() { # FILE LINE
+  comment=""
   case $1 in
-  *.rs) [[ $2 == *//* ]] && printf '%s' "//${2#*//}" ;;
-  *.lean) [[ $2 == *--* ]] && printf '%s' "--${2#*--}" ;;
+  *.rs) rs_comment "$2" ;;
+  *.lean) [[ $2 == *--* ]] && comment="--${2#*--}" ;;
   *.sh | *.toml | *.yaml | *.yml | *.nix | *.tla | *.cfg | .githooks/*)
-    [[ $2 =~ (^|[[:space:]])#([^[!]|$) ]] && printf '%s' "#${2#*#}"
+    [[ $2 =~ (^|[[:space:]])#([^[!]|$) ]] && comment="#${2#*#}"
     ;;
   esac
   return 0
@@ -64,6 +132,14 @@ checked() { # FILE
   return 0
 }
 
+threshold_file() { # FILE
+  checked "$1" || return 1
+  case $1 in
+  */tests/* | .github/workflows/*) return 0 ;;
+  *) return 1 ;;
+  esac
+}
+
 # Settings of the tests and the workflows that only go up: a minimum the
 # generators must reach and the number of generated cases. Each is an
 # extended regular expression whose first group is the number.
@@ -74,7 +150,7 @@ thresholds=(
   'PROPTEST_CASES:[[:space:]]*([0-9_]+)'
   'unwrap_or\(([0-9_]+)\)'
 )
-threshold_advice='Do not lower a minimum or a number of cases to make a test pass. Make the generators reach the rule more often, or fix the code; the minimums are what ADR 4 and ADR 13 rely on.'
+threshold_advice='Do not lower or remove a minimum or a number of cases to make a test pass. Make the generators reach the rule more often, or fix the code; the minimums are what ADR 4 and ADR 13 rely on.'
 
 found=0
 report() { # FILE LINE TEXT ADVICE
@@ -82,15 +158,48 @@ report() { # FILE LINE TEXT ADVICE
   found=$((found + 1))
 }
 
-# The value of each threshold on the lines a hunk removes, by pattern, so the
-# added lines of the hunk can be compared with them.
-declare -A removed=()
+# Track thresholds across the whole file so removing a threshold or moving it
+# to another hunk with a lower value cannot slip past the check.
+declare -A removed_max=() removed_line=() removed_text=()
+declare -A added_min=() added_line=() added_text=()
+flush_thresholds() {
+  if [ -n "$file" ] && threshold_file "$file"; then
+    for pattern in "${thresholds[@]}"; do
+      [ -n "${removed_max[$pattern]:-}" ] || continue
+      if [ -z "${added_min[$pattern]:-}" ]; then
+        report "$file" "${removed_line[$pattern]}" "${removed_text[$pattern]}" "$threshold_advice"
+      elif ((added_min[$pattern] < removed_max[$pattern])); then
+        report "$file" "${added_line[$pattern]}" "${added_text[$pattern]}" "$threshold_advice"
+      fi
+    done
+  fi
+  removed_max=()
+  removed_line=()
+  removed_text=()
+  added_min=()
+  added_line=()
+  added_text=()
+}
+
+old_file=""
 file=""
 line=0
 while IFS= read -r row; do
   case $row in
+  '--- a/'*)
+    old_file=${row#--- a/}
+    continue
+    ;;
   '+++ b/'*)
+    flush_thresholds
     file=${row#+++ b/}
+    in_block_comment=false
+    continue
+    ;;
+  '+++ /dev/null')
+    flush_thresholds
+    file=$old_file
+    in_block_comment=false
     continue
     ;;
   '+++ '* | '--- '*) continue ;;
@@ -98,7 +207,7 @@ while IFS= read -r row; do
     # @@ -a,b +c,d @@: the next added line is line c of the new file.
     line=${row#*+}
     line=${line%%[, ]*}
-    removed=()
+    in_block_comment=false
     continue
     ;;
   '-'*)
@@ -106,11 +215,18 @@ while IFS= read -r row; do
     if [[ $file == *.proptest-regressions && $text == cc\ * ]]; then
       report "$file" "$line" "$text" "Keep each seed that once failed, so the case runs again on every test run."
     fi
-    for pattern in "${thresholds[@]}"; do
-      if [[ $text =~ $pattern ]]; then
-        removed[$pattern]=${BASH_REMATCH[1]//_/}
-      fi
-    done
+    if threshold_file "$file"; then
+      for pattern in "${thresholds[@]}"; do
+        if [[ $text =~ $pattern ]]; then
+          val=${BASH_REMATCH[1]//_/}
+          if [ -z "${removed_max[$pattern]:-}" ] || ((val > removed_max[$pattern])); then
+            removed_max[$pattern]=$val
+            removed_line[$pattern]=$line
+            removed_text[$pattern]=$text
+          fi
+        fi
+      done
+    fi
     continue
     ;;
   '+'*) ;;
@@ -118,7 +234,7 @@ while IFS= read -r row; do
   esac
   text=${row#+}
   if checked "$file"; then
-    comment=$(comment_of "$file" "$text")
+    comment_of "$file" "$text"
     for rule in "${rules[@]}"; do
       IFS=$'\t' read -r kind glob pattern advice <<<"$rule"
       # shellcheck disable=SC2053 # the pattern is meant to glob
@@ -129,19 +245,22 @@ while IFS= read -r row; do
         report "$file" "$line" "$text" "$advice"
       fi
     done
-    for pattern in "${thresholds[@]}"; do
-      case $file in
-      */tests/* | .github/workflows/*) ;;
-      *) continue ;;
-      esac
-      if [[ $text =~ $pattern ]] && [ -n "${removed[$pattern]:-}" ] &&
-        ((${BASH_REMATCH[1]//_/} < ${removed[$pattern]})); then
-        report "$file" "$line" "$text" "$threshold_advice"
-      fi
-    done
+    if threshold_file "$file"; then
+      for pattern in "${thresholds[@]}"; do
+        if [[ $text =~ $pattern ]]; then
+          val=${BASH_REMATCH[1]//_/}
+          if [ -z "${added_min[$pattern]:-}" ] || ((val < added_min[$pattern])); then
+            added_min[$pattern]=$val
+            added_line[$pattern]=$line
+            added_text[$pattern]=$text
+          fi
+        fi
+      done
+    fi
   fi
   line=$((line + 1))
 done < <("${diff[@]}")
+flush_thresholds
 
 # Every exclusion of cargo-mutants has its reason in the comment above it
 # (ADR 13). The whole file is read, since an entry may move.
@@ -152,15 +271,27 @@ if "${diff[@]}" "$mutants" | grep -q '^+'; then
   in_list=false
   while IFS= read -r text; do
     number=$((number + 1))
-    case $text in
-    *'= ['*) in_list=true ;;
-    ']'*) in_list=false ;;
-    *\"*)
-      if $in_list && [[ $previous != *\"* ]] && [[ ! $previous =~ ^[[:space:]]*# ]]; then
+    if [[ $text =~ ^[[:space:]]*# ]]; then
+      previous=$text
+      continue
+    fi
+    starts_list=false
+    if [[ $text == *'= ['* ]]; then
+      in_list=true
+      starts_list=true
+    fi
+    if $in_list && [[ $text == *\"* || $text == *\'* ]]; then
+      if $starts_list; then
+        if [[ ! $previous =~ ^[[:space:]]*# ]]; then
+          report "$mutants" "$number" "$text" "Say in a comment above the entry why no test can catch this mutant (ADR 13); otherwise close it with a test."
+        fi
+      elif [[ $previous != *\"* && $previous != *\'* ]] && [[ ! $previous =~ ^[[:space:]]*# ]]; then
         report "$mutants" "$number" "$text" "Say in a comment above the entry why no test can catch this mutant (ADR 13); otherwise close it with a test."
       fi
-      ;;
-    esac
+    fi
+    if $in_list && [[ $text == *']'* ]]; then
+      in_list=false
+    fi
     # Entries next to each other share the comment above the first.
     previous=$text
   done < <(show "$mutants")

@@ -7,7 +7,7 @@ mod signal;
 use std::num::NonZeroU32;
 use std::ops::Range;
 
-use pathos_core::{Command, Event, PPQ, Project, Tick};
+use pathos_core::{Command, Event, PPQ, Project, Tick, UNITY_VOLUME};
 use pathos_render::Frame;
 use serde::{Deserialize, Serialize};
 
@@ -99,12 +99,8 @@ pub fn measure(project: &Project) -> Result<Report, TooLong> {
         Some(rate) => rate,
         None => panic!("SAMPLE_RATE is not zero"),
     };
-    let frames = song_frames(project);
+    let frames = check_length(project)?;
     let seconds = frames as f64 / f64::from(SAMPLE_RATE);
-    if frames > MAX_SECONDS * u64::from(SAMPLE_RATE) {
-        return Err(TooLong { seconds });
-    }
-    let frames = frames as usize;
     let bars = bars(project, frames);
     let measured =
         |project: &Project| measurements(&pathos_render::render(project, RATE, frames), &bars);
@@ -123,8 +119,20 @@ pub fn measure(project: &Project) -> Result<Report, TooLong> {
     })
 }
 
-/// `project` with only `track` heard: soloed, unmuted, and every other track
-/// unsoloed, by the commands any edit uses.
+/// The length of `project` in frames, or [`TooLong`] when it exceeds
+/// [`MAX_SECONDS`].
+fn check_length(project: &Project) -> Result<usize, TooLong> {
+    let frames = song_frames(project);
+    if frames > MAX_SECONDS * u64::from(SAMPLE_RATE) {
+        return Err(TooLong {
+            seconds: frames as f64 / f64::from(SAMPLE_RATE),
+        });
+    }
+    Ok(frames as usize)
+}
+
+/// `project` with only `track` heard: at unity master volume, soloed, unmuted,
+/// and every other track unsoloed, by the commands any edit uses (ADR 36).
 fn alone(project: &Project, track: u64) -> Project {
     let mut alone = project.clone();
     let mut apply = |command| {
@@ -134,6 +142,9 @@ fn alone(project: &Project, track: u64) -> Project {
             alone = next;
         }
     };
+    apply(Command::SetMasterVolume {
+        volume: u64::from(UNITY_VOLUME),
+    });
     for other in 0..project.track_count() {
         apply(Command::SetTrackSolo {
             track: other,
@@ -303,7 +314,137 @@ mod tests {
         assert_eq!(loudest(&first.measurements), 500.0);
         assert_eq!(loudest(&second.measurements), 1000.0);
         let peak = first.measurements.true_peak.unwrap();
-        assert!(peak <= 0.1 && peak > -12.0, "{peak}");
+        assert!((peak - 0.0).abs() <= 0.1, "{peak}");
+        let second_peak = second.measurements.true_peak.unwrap();
+        assert!((second_peak - 0.0).abs() <= 0.1, "{second_peak}");
+    }
+
+    #[test]
+    fn bars_follow_tempo_changes() {
+        // Bar 1 at 120 BPM lasts 2 s (96_000 frames); bar 2 at 60 BPM lasts
+        // 4 s (192_000 frames). A clip in bar 2 ends at tick 7680 (6 s total).
+        let project = project(&[
+            "add-track",
+            "set-tempo 3840 1000000",
+            "add-clip 0 3840 3840",
+            "add-note 0 0 3840 69 127",
+        ]);
+        let frames = check_length(&project).unwrap();
+        assert_eq!(frames, 6 * SAMPLE_RATE as usize);
+        assert_eq!(
+            bars(&project, frames),
+            vec![(0, 0..96_000), (3840, 96_000..288_000),]
+        );
+        // A partial last bar is clamped to the song's frame count.
+        assert_eq!(
+            bars(&project, 150_000),
+            vec![(0, 0..96_000), (3840, 96_000..150_000),]
+        );
+
+        let report = measure(&project).unwrap();
+        assert_eq!(report.seconds, 6.0);
+        assert_eq!(report.master.bars.len(), 2);
+        assert_eq!(report.master.bars[0].start_tick, 0);
+        assert_eq!(report.master.bars[0].loudness, None);
+        assert_eq!(report.master.bars[1].start_tick, 3840);
+        assert!(report.master.bars[1].loudness.is_some());
+    }
+
+    #[test]
+    fn alone_measures_each_track_even_when_another_track_is_soloed() {
+        // Track 0 is soloed, so the master hears only track 0, while track 1
+        // is still measured alone as if soloed.
+        let project = project(&[
+            "add-track",
+            "add-track",
+            "add-clip 0 0 3840",
+            "add-note 0 0 3840 69 127",
+            "add-clip 1 3840 3840",
+            "add-note 1 0 3840 81 127",
+            "solo-track 0",
+        ]);
+        let isolated = alone(&project, 1);
+        assert!(!isolated.track(0).unwrap().solo);
+        assert!(isolated.track(1).unwrap().solo);
+
+        let report = measure(&project).unwrap();
+        assert_eq!(
+            report.master.loudness,
+            report.tracks[0].measurements.loudness
+        );
+        assert_eq!(report.master.bars[1].loudness, None);
+        assert!(report.tracks[1].measurements.loudness.is_some());
+        assert_eq!(report.tracks[1].measurements.bars[0].loudness, None);
+        assert!(report.tracks[1].measurements.bars[1].loudness.is_some());
+    }
+
+    #[test]
+    fn track_measurements_ignore_master_volume_while_master_reflects_it() {
+        let base = project(&["add-track", "add-clip 0 0 3840", "add-note 0 0 3840 69 127"]);
+        let half_master = project(&[
+            "add-track",
+            "add-clip 0 0 3840",
+            "add-note 0 0 3840 69 127",
+            "set-master-volume 500",
+        ]);
+        let muted_master = project(&[
+            "add-track",
+            "add-clip 0 0 3840",
+            "add-note 0 0 3840 69 127",
+            "set-master-volume 0",
+        ]);
+
+        let base_report = measure(&base).unwrap();
+        let half_report = measure(&half_master).unwrap();
+        let muted_report = measure(&muted_master).unwrap();
+
+        // Each track is measured at unity master volume (ADR 36).
+        assert_eq!(half_report.tracks, base_report.tracks);
+        assert_eq!(muted_report.tracks, base_report.tracks);
+
+        // The master reflects the master volume: -6.02 dB at 500, silent at 0.
+        let master_diff =
+            base_report.master.loudness.unwrap() - half_report.master.loudness.unwrap();
+        assert!((master_diff - 6.02).abs() <= 0.05, "{master_diff}");
+        let peak_diff =
+            base_report.master.true_peak.unwrap() - half_report.master.true_peak.unwrap();
+        assert!((peak_diff - 6.02).abs() <= 0.05, "{peak_diff}");
+        assert_eq!(muted_report.master.loudness, None);
+        assert_eq!(muted_report.master.true_peak, None);
+    }
+
+    #[test]
+    fn exact_max_seconds_boundary_is_accepted_and_one_tick_past_is_refused() {
+        // At 120 BPM, 1 second = 2 * PPQ ticks, so 600 seconds = 600 * 2 * PPQ.
+        let exact_end = MAX_SECONDS * 2 * PPQ;
+        let at_limit = project(&[
+            "add-track",
+            &format!("add-clip 0 {} 1920", exact_end - 1920),
+        ]);
+        assert_eq!(
+            check_length(&at_limit).unwrap(),
+            (MAX_SECONDS * u64::from(SAMPLE_RATE)) as usize
+        );
+
+        let one_tick_past = project(&[
+            "add-track",
+            &format!("add-clip 0 {} 1921", exact_end - 1920),
+        ]);
+        // Checked before `measure`, which would render the whole song if the
+        // limit let it through.
+        assert!(check_length(&one_tick_past).is_err());
+        let error = measure(&one_tick_past).unwrap_err();
+        assert!(error.seconds > MAX_SECONDS as f64);
+    }
+
+    #[test]
+    fn round_avoids_negative_zero() {
+        assert_eq!(round(-0.001).to_bits(), 0.0f64.to_bits());
+        assert_eq!(round(-0.0).to_bits(), 0.0f64.to_bits());
+        assert_eq!(round(0.001).to_bits(), 0.0f64.to_bits());
+        assert_eq!(round(1.234), 1.23);
+        assert_eq!(round(1.235), 1.24);
+        assert_eq!(round(-1.235), -1.24);
     }
 
     #[test]
@@ -311,6 +452,7 @@ mod tests {
         // A clip starting at eleven minutes, at 120 BPM.
         let start = 11 * 60 * 2 * PPQ;
         let project = project(&["add-track", &format!("add-clip 0 {start} 1920")]);
+        assert!(check_length(&project).is_err());
         let error = measure(&project).unwrap_err();
         assert!(error.seconds > 660.0);
         assert!(error.to_string().starts_with("the song lasts 661 seconds"));

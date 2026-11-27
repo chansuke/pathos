@@ -558,4 +558,234 @@ mod tests {
             (Value::Null, json!(-32700))
         );
     }
+
+    #[test]
+    fn commands_description_lists_every_command_keyword() {
+        use pathos_core::{Command, Edit};
+
+        let samples: &[Command] = &[
+            Command::AddTrack,
+            Command::AddClip {
+                track: 0,
+                start: 0,
+                length: 960,
+            },
+            Command::MoveClip {
+                id: 0,
+                track: 0,
+                start: 0,
+            },
+            Command::SplitClip { id: 0, tick: 480 },
+            Command::DeleteClip { id: 0 },
+            Command::SetTempo {
+                tick: 0,
+                us_per_quarter: 500_000,
+            },
+            Command::RemoveTempo { tick: 960 },
+            Command::AddNote {
+                id: 0,
+                start: 0,
+                length: 480,
+                pitch: 60,
+                velocity: 100,
+            },
+            Command::RemoveNote {
+                id: 0,
+                start: 0,
+                pitch: 60,
+            },
+            Command::SetTrackVolume {
+                track: 0,
+                volume: 1000,
+            },
+            Command::SetTrackMute {
+                track: 0,
+                muted: true,
+            },
+            Command::SetTrackMute {
+                track: 0,
+                muted: false,
+            },
+            Command::SetTrackSolo {
+                track: 0,
+                solo: true,
+            },
+            Command::SetTrackSolo {
+                track: 0,
+                solo: false,
+            },
+            Command::SetTrackPan { track: 0, pan: 100 },
+            Command::SetMasterVolume { volume: 1000 },
+        ];
+        let tokens: Vec<&str> = COMMANDS
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '-')
+            .filter(|word| !word.is_empty())
+            .collect();
+        for &command in samples {
+            // Exhaustive match so adding a new Command variant fails to compile
+            // until it is also added to `samples` and checked against `COMMANDS`.
+            match command {
+                Command::AddTrack
+                | Command::AddClip { .. }
+                | Command::MoveClip { .. }
+                | Command::SplitClip { .. }
+                | Command::DeleteClip { .. }
+                | Command::SetTempo { .. }
+                | Command::RemoveTempo { .. }
+                | Command::AddNote { .. }
+                | Command::RemoveNote { .. }
+                | Command::SetTrackVolume { .. }
+                | Command::SetTrackMute { muted: true, .. }
+                | Command::SetTrackMute { muted: false, .. }
+                | Command::SetTrackSolo { solo: true, .. }
+                | Command::SetTrackSolo { solo: false, .. }
+                | Command::SetTrackPan { .. }
+                | Command::SetMasterVolume { .. } => {}
+            }
+            let text = Edit::Apply(command).to_string();
+            let keyword = text.split_whitespace().next().unwrap();
+            assert!(
+                tokens.contains(&keyword),
+                "COMMANDS description is missing {keyword:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn missing_and_invalid_tool_arguments_are_rejected() {
+        let call = |id: u64, name: &str, arguments: Value| {
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": arguments}
+            })
+        };
+        let cases = [
+            (
+                call(1, "propose_commands", json!({"commands": ["add-track"]})),
+                "propose_commands needs summary",
+            ),
+            (
+                call(
+                    2,
+                    "propose_commands",
+                    json!({"summary": 123, "commands": ["add-track"]}),
+                ),
+                "summary must be a string",
+            ),
+            (
+                call(3, "propose_commands", json!({"summary": "x"})),
+                "propose_commands needs commands",
+            ),
+            (
+                call(
+                    4,
+                    "propose_commands",
+                    json!({"summary": "x", "commands": "add-track"}),
+                ),
+                "commands must be a list of strings",
+            ),
+            (
+                call(5, "report_finding", json!({"start": 0, "end": 960})),
+                "report_finding needs summary",
+            ),
+            (
+                call(
+                    6,
+                    "report_finding",
+                    json!({"summary": "x", "track": -1, "start": 0, "end": 960}),
+                ),
+                "track must be a whole number",
+            ),
+            (
+                call(7, "report_finding", json!({"summary": "x", "end": 960})),
+                "report_finding needs start",
+            ),
+            (
+                call(8, "report_finding", json!({"summary": "x", "start": 0})),
+                "report_finding needs end",
+            ),
+            (
+                call(
+                    9,
+                    "report_finding",
+                    json!({"summary": "x", "start": 0, "end": "960"}),
+                ),
+                "end must be a whole number",
+            ),
+            (
+                call(
+                    10,
+                    "report_finding",
+                    json!({"summary": "x", "start": 0, "end": 960, "commands": 42}),
+                ),
+                "commands must be a list of strings",
+            ),
+            (call(11, "get_proposal", json!({})), "get_proposal needs id"),
+            (
+                call(12, "get_proposal", json!({"id": "0"})),
+                "id must be a whole number",
+            ),
+        ];
+        let messages: Vec<Value> = cases.iter().map(|(msg, _)| msg.clone()).collect();
+        let (replies, requests) = exchange(&messages, |_| unreachable!());
+        assert!(requests.is_empty());
+        assert_eq!(replies.len(), cases.len());
+        for (reply, (_, expected)) in replies.iter().zip(&cases) {
+            assert_eq!(reply["error"]["code"], -32602);
+            assert_eq!(reply["error"]["message"], *expected);
+        }
+    }
+
+    #[test]
+    fn measurements_reports_window_errors_unexpected_responses_and_too_long() {
+        let call = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "get_measurements", "arguments": {}}
+        });
+        let text = |reply: &Value| {
+            reply["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+
+        let (replies, _) = exchange(std::slice::from_ref(&call), |_| Ok(Response::error("busy")));
+        assert_eq!(replies[0]["result"]["isError"], true);
+        assert_eq!(text(&replies[0]), "busy");
+
+        let (replies, _) = exchange(std::slice::from_ref(&call), |_| {
+            Ok(Response::Proposed { id: 0 })
+        });
+        assert_eq!(replies[0]["result"]["isError"], true);
+        assert_eq!(text(&replies[0]), "the window did not send its file");
+
+        // 120 BPM: 1_152_960 ticks is 600.5 seconds, exceeding the 600s limit.
+        let (replies, _) = exchange(&[call], |_| {
+            Ok(Response::File {
+                text: "add-track\nadd-clip 0 0 1152960\n".into(),
+            })
+        });
+        assert_eq!(replies[0]["result"]["isError"], true);
+        assert!(text(&replies[0]).contains("more than the 600"));
+    }
+
+    #[test]
+    fn empty_lines_notifications_and_responses_without_method_produce_no_output() {
+        let input = "\n   \t  \n\
+            {\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\"}\n\
+            {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}\n\
+            {\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"ping\"}\n";
+        let mut output = Vec::new();
+        serve(input.as_bytes(), &mut output, |_| unreachable!()).unwrap();
+        let replies: Vec<Value> = String::from_utf8(output)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(replies, [json!({"jsonrpc": "2.0", "id": 8, "result": {}})]);
+    }
 }

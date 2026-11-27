@@ -53,6 +53,16 @@ expect fail "a line without a key" "$render" $'Some change.\n\nREAPER comparison
 expect fail "a line with the key of other code" "$render" "REAPER comparison: passed $(scripts/reaper-key "$app")"
 expect pass "a line with the key of the head" "$render" $'Some change.\r\n\r\nREAPER comparison: passed '"$key"$'\r'
 
+# Missing origin/main (merge-base failure) fails clearly rather than skipping.
+missing_status=0
+missing_out=$(echo "refs/heads/main $render refs/heads/main 0000000000000000000000000000000000000000" |
+  .githooks/pre-push 2>&1) || missing_status=$?
+if [ "$missing_status" -eq 0 ]; then
+  fail "the hook silently skipped when origin/main was missing"
+elif ! grep -q "merge-base" <<<"$missing_out"; then
+  fail "the hook did not explain the merge-base failure: $missing_out"
+fi
+
 # The hook prints the line for code that passed before without running
 # REAPER again.
 git update-ref refs/remotes/origin/main "$base"

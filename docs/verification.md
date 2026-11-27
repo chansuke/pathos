@@ -7,11 +7,11 @@ lists the items below that the change triggers.
 
 | Mode | What it runs |
 |---|---|
-| `scripts/verify quick` | `cargo fmt`, `cargo clippy`, `cargo deny`, the tests of every crate but the core, and `scripts/check-escape-hatches.sh` on the lines added since `origin/main`; the pre-commit hook runs it |
-| `scripts/verify` | `quick`, then `lake -d spec build`, the audit of `spec/theorems.txt` and `spec/definitions.txt`, `cargo test -p pathos-core`, the check that new proptest seeds are committed, the loom tests and the ADR index |
-| `scripts/verify mutants` | `cargo mutants` on the lines of `crates/pathos-core`, `crates/pathos-agent` and `src/editor.rs` changed since `origin/main`, as CI does for a pull request (ADR 13) |
+| `scripts/verify quick [--staged]` | `cargo fmt`, `cargo clippy`, `cargo deny`, the tests of every crate but the core, and `scripts/check-escape-hatches.sh` on the lines added since `origin/main` (or staged lines with `--staged`); the pre-commit hook runs `scripts/verify quick --staged` |
+| `scripts/verify` | `quick`, then `lake -d spec build`, the audit of `spec/theorems.txt` and `spec/definitions.txt`, `cargo test -p pathos-core` (which defaults to `PROPTEST_CASES=2000` locally; CI's Spec workflow runs with `PROPTEST_CASES=10000`), the check that new proptest seeds are committed, the loom tests and the ADR index |
+| `scripts/verify mutants` | `cargo mutants` on the lines of `crates/pathos-core`, `crates/pathos-agent`, `src/editor.rs`, `crates/pathos-measure` and `crates/pathos-render` changed since the merge-base with `origin/main`, as CI does for a pull request (weekly CI mutates `pathos-core`, `pathos-agent` and `src/editor.rs` in full; ADR 13) |
 | `scripts/verify tla` | TLC on each specification in `tla/` (ADR 17) |
-| `scripts/verify kani [--harness NAME]` | the Kani harnesses of the core, or one of them (ADR 11); run it outside `nix develop` |
+| `scripts/verify kani [--harness NAME]` | the Kani harnesses of the core, or one of them, plus the cover-property check (`scripts/check-kani-covers.sh`, ADR 11); run it outside `nix develop` |
 | `scripts/verify reaper` | the comparison with REAPER (ADR 33, ADR 34), on Linux |
 | `scripts/verify full` | the default, then `tla`, `mutants` and `nix build` |
 
@@ -42,7 +42,7 @@ a lint or a CI step now catches the mistake on its own.
 
 ### Definitions and theorem statements get a human review
 
-- Paths: `spec/Pathos/*`, `spec/Pathos.lean`
+- Paths: `spec/Pathos/*`, `spec/Pathos.lean`, `spec/Audit.lean`, `spec/Main.lean`
 - Check: Name each definition that `spec/definitions.txt` shows as changed
   and each restated theorem in the pull request, so that a reviewer reads
   them. Never weaken a statement to make a proof go through.
@@ -88,7 +88,7 @@ a lint or a CI step now catches the mistake on its own.
 
 ### The window is looked at
 
-- Paths: `src/main.rs`, `src/agent.rs`
+- Paths: `src/main.rs`, `src/agent.rs`, `src/layout.rs`, `src/theme.rs`
 - Check: No test draws the window. Run `cargo run` inside `nix develop` and
   look at what the change draws, at the default size and a small one.
 - Basis: ADR 26 to ADR 29.

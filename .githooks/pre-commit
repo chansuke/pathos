@@ -1,8 +1,7 @@
 #!/bin/sh
-# Checks the lines this commit adds and runs the quick checks before each
-# commit; `scripts/verify` runs the rest before a pull request.
+# Runs the quick checks and checks the staged lines before each commit;
+# `scripts/verify` runs the rest before a pull request.
 # `git commit --no-verify` skips this.
 set -eu
 
-scripts/check-escape-hatches.sh --staged
-exec scripts/verify quick
+exec scripts/verify quick --staged
