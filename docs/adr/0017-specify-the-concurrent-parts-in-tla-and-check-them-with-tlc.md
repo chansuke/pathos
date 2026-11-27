@@ -122,9 +122,11 @@ Answers to the questions this record left open:
   invariants. Recording traces under loom and checking them with TLC is left
   for later, when a specification is large enough to need it.
 * Each specification is checked at the largest constants that TLC finishes in
-  about a minute on CI. `SnapshotHandoff` at 15 snapshots and a queue of 3 has
-  16 268 states and takes about 2 seconds; at 40 snapshots and a queue of 6,
-  TLC had not finished after 20 minutes.
+  about a minute on CI. In the initial measurement, `SnapshotHandoff` at 15
+  snapshots and a queue of 3 had 16 268 states and took about 2 seconds, while
+  at 40 snapshots and a queue of 6 TLC had not finished after 20 minutes;
+  `tla/SnapshotHandoff.cfg` now checks `Snapshots = 30` and `Capacity = 1`
+  (10 447 distinct states in a few seconds).
 
 The first comparison of tla-ts 0.0.10 with TLC 1.7.4, on `SnapshotHandoff`
 with one worker:

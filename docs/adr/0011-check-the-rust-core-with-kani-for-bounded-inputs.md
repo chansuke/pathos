@@ -3,6 +3,9 @@ number: 11
 title: Check the Rust core with Kani for bounded inputs
 status: accepted
 date: 2026-11-13
+links:
+- target: 16
+  kind: amendedby
 ---
 
 # Check the Rust core with Kani for bounded inputs
