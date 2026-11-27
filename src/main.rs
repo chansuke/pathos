@@ -1296,9 +1296,11 @@ fn main() {
             ])
             .expect("gpui rejected the bundled JetBrains Mono");
         let bounds = Bounds::centered(None, size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)), cx);
+        let (min_width, min_height) = layout::min_window_size();
         let opened = cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
+                window_min_size: Some(size(px(min_width), px(min_height))),
                 titlebar: Some(TitlebarOptions {
                     title: Some("pathos".into()),
                     ..Default::default()

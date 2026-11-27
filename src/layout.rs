@@ -213,6 +213,18 @@ pub fn master_rect(width: f32) -> Rect {
     }
 }
 
+/// The smallest window, width then height, that the layout fits (ADR 37):
+/// the master volume keeps the top bar's padding from the metronome button,
+/// and one lane shows above the piano roll.
+pub fn min_window_size() -> (f32, f32) {
+    let metronome = metronome_button_rect();
+    // The master volume lies a fixed distance left of the right edge.
+    let right_group = -master_rect(0.0).x;
+    let width = metronome.x + metronome.width + BAR_PADDING + right_group;
+    let height = TIMELINE_TOP + LANE_HEIGHT + ROLL_RULER_HEIGHT + roll_height() + FOOTER_HEIGHT;
+    (width, height)
+}
+
 /// The meter of `channel`, 0 for the left and 1 for the right, at the right
 /// of the top bar (ADR 25). Its scale lies below the right one.
 pub fn meter_rect(width: f32, channel: usize) -> Rect {
@@ -681,6 +693,29 @@ mod tests {
         // A wider window moves them right by as much.
         assert_eq!(master_rect(width + 100.0).x, master.x + 100.0);
         assert_eq!(meter_rect(width + 100.0, 1).x, right.x + 100.0);
+    }
+
+    #[test]
+    fn the_smallest_window_fits_the_top_bar_and_a_lane_above_the_roll() {
+        let (width, height) = min_window_size();
+        let metronome = metronome_button_rect();
+        let toggles_end = metronome.x + metronome.width + BAR_PADDING;
+        assert_eq!(master_rect(width).x, toggles_end, "the master just fits");
+        assert!(
+            master_rect(width - 1.0).x < toggles_end,
+            "narrower, it would cover the metronome"
+        );
+        let view = View {
+            width,
+            height,
+            scroll: 0.0,
+        };
+        assert_eq!(lanes_rect(&view, true).height, LANE_HEIGHT, "one lane");
+        assert!(roll_top(height - 1.0) - ROLL_RULER_HEIGHT < TIMELINE_TOP + LANE_HEIGHT);
+        assert!(
+            WINDOW_WIDTH >= width && WINDOW_HEIGHT >= height,
+            "opens larger"
+        );
     }
 
     #[test]
