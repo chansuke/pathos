@@ -6,12 +6,16 @@
 #                                        audit of theorems and definitions,
 #                                        the differential tests of the core,
 #                                        the loom tests and the ADR index
-#   scripts/verify quick [--base REV]    format, clippy, cargo deny, the
+#   scripts/verify quick [--base REV | --staged]
+#                                        format, clippy, cargo deny, the
 #                                        tests of every crate but the core
-#                                        and the lines added since REV
+#                                        and the lines added since REV (or
+#                                        staged with --staged)
 #   scripts/verify mutants [--base REV]  cargo mutants on the lines of the
-#                                        core, the agent interface and the
-#                                        editor changed since REV (ADR 13)
+#                                        core, the agent interface, the
+#                                        editor, the measurements and the
+#                                        render changed since the merge-base
+#                                        with REV (ADR 13)
 #   scripts/verify tla                   TLC on each specification in tla/
 #                                        (ADR 17)
 #   scripts/verify kani [--harness NAME] the Kani harnesses of the core, or
@@ -31,6 +35,7 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 
 mode=check
 base=origin/main
+staged=false
 harness=()
 args=("$@")
 while (($# > 0)); do
@@ -39,6 +44,9 @@ while (($# > 0)); do
   --base)
     base=${2:?--base needs a revision}
     shift
+    ;;
+  --staged)
+    staged=true
     ;;
   --harness)
     harness=(--exact --harness "${2:?--harness needs a name}")
@@ -114,14 +122,16 @@ adr_index() {
   adrs doctor && adrs generate toc | diff -u docs/adr/README.md -
 }
 
-# Mutates the lines changed since $base in the core, the agent interface
-# and the editor, as the Mutants workflow does for a pull request.
+# Mutates the lines changed since the merge-base with $base in the core, the
+# agent interface, the editor, the measurements and the render, as the Mutants
+# workflow does for a pull request.
 mutants() {
-  local name paths package changes status=0
+  local merge_base name paths package changes status=0
+  merge_base=$(git merge-base "$base" HEAD) || return
   while read -r name package paths; do
     changes=$out/mutants-$name.diff
     # shellcheck disable=SC2086 # one argument per path
-    git diff "$base" -- $paths >"$changes" || return
+    git diff "$merge_base" -- $paths >"$changes" || return
     if [ ! -s "$changes" ]; then
       echo "No change to $paths since $base."
       continue
@@ -133,6 +143,8 @@ mutants() {
 core pathos-core crates/pathos-core
 agent pathos-agent crates/pathos-agent
 editor pathos src/editor.rs
+measure pathos-measure crates/pathos-measure
+render pathos-render crates/pathos-render
 LIST
   return "$status"
 }
@@ -157,8 +169,13 @@ quick() {
     cargo deny check
   step test "fix the code or the test the log names" \
     cargo test --locked --workspace --exclude pathos-core
-  step added-lines "do what the log says for each line; do not reword the line to slip past the check" \
-    scripts/check-escape-hatches.sh "$base"
+  if $staged; then
+    step added-lines "do what the log says for each line; do not reword the line to slip past the check" \
+      scripts/check-escape-hatches.sh --staged
+  else
+    step added-lines "do what the log says for each line; do not reword the line to slip past the check" \
+      scripts/check-escape-hatches.sh "$base"
+  fi
 }
 
 check() {
@@ -197,6 +214,8 @@ kani)
   step kani "read the failed property in the log; a harness that runs out of time needs a smaller bound (ADR 11, ADR 16)" \
     bash -c 'cd crates/pathos-core && cargo kani --output-format terse \
       -Z unstable-options --harness-timeout 10m "$@"' kani "${harness[@]}"
+  step kani-covers "ensure each harness has at least one reachable cover property (ADR 11)" \
+    scripts/check-kani-covers.sh "$logs/kani.log"
   ;;
 reaper)
   if [ "$(uname -s)" != Linux ]; then
