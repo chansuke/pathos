@@ -1,7 +1,7 @@
 ---
 number: 37
 title: Keep the window at least as large as the top bar and one lane above the piano roll
-status: proposed
+status: accepted
 date: 2026-11-27
 ---
 
